@@ -11,8 +11,8 @@ android {
         applicationId = "com.selim.gamebooster"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-PRO"
+        versionCode = 2
+        versionName = "2.0.0-SHIZUKU"
     }
 
     buildTypes {
@@ -47,5 +47,8 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-}
 
+    // Gerçek ADB / Sistem Yetkisi İçin Resmi Shizuku API
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+}
