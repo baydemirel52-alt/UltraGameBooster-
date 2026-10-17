@@ -58,7 +58,7 @@ class MainActivity : ComponentActivity() {
     private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
         shizukuGrantedState.value = (grantResult == PackageManager.PERMISSION_GRANTED)
         if (shizukuGrantedState.value) {
-            Toast.makeText(this, "Shizuku ADB Yetkisi Bağlandı! Gerçek FPS & Downscale Aktif.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Shizuku ADB Yetkisi Bağlandı! Doğrulamalı Motor Aktif.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -170,9 +170,14 @@ fun GameBoosterDashboard(
     val prefs = remember { context.getSharedPreferences(SystemOptimizer.PREFS_NAME, Context.MODE_PRIVATE) }
     val nm = remember { context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
 
+    val supportedHzList = remember { optimizer.getSupportedRefreshRates() }
     var selectedTab by remember { mutableIntStateOf(0) }
-    var targetHz by remember { mutableIntStateOf(prefs.getInt("target_hz", 120)) }
-    var downscaleRatio by remember { mutableStateOf(prefs.getString("downscale", "0.85") ?: "0.85") }
+    var targetHz by remember {
+        val saved = prefs.getInt("target_hz", supportedHzList.lastOrNull() ?: 120)
+        mutableIntStateOf(if (saved in supportedHzList) saved else (supportedHzList.lastOrNull() ?: 120))
+    }
+    var downscaleRatio by remember { mutableStateOf(prefs.getString("downscale", "0.8") ?: "0.8") }
+    var selectedPingServer by remember { mutableStateOf(optimizer.getSelectedPingServer()) }
 
     var autoDnd by remember { mutableStateOf(prefs.getBoolean("auto_dnd", true)) }
     var wifiLowLatency by remember { mutableStateOf(prefs.getBoolean("wifi_lock", true)) }
@@ -183,13 +188,18 @@ fun GameBoosterDashboard(
     var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var canUseDnd by remember { mutableStateOf(nm.isNotificationPolicyAccessGranted) }
 
+    // Uygulama arka plana geçtiğinde Kokpit döngüsünü tamamen durdurmak için yaşam döngüsü durumu
+    var isAppResumed by remember { mutableStateOf(true) }
+
     var metrics by remember {
-        mutableStateOf(HardwareMetrics(0, 8192, 0, 35.0f, null, 80, -1, 120, shizukuGranted))
+        mutableStateOf(HardwareMetrics(0, 4096, 8192, 0, 35.0f, null, 80, -1, 120, shizukuGranted, false))
     }
     var installedApps by remember { mutableStateOf<List<GameAppInfo>>(emptyList()) }
     var customStatusOverride by remember { mutableStateOf<String?>(null) }
 
-    val statusSubtitle = customStatusOverride ?: if (shizukuGranted) {
+    val statusSubtitle = customStatusOverride ?: if (metrics.thermalThrottledByGuard) {
+        "⚠️ Termostat Koruması Aktif (Isı Sınırı Aşıldı)"
+    } else if (shizukuGranted) {
         "Shizuku ADB Motoru Aktif ✅"
     } else {
         "Standart Mod • Shizuku Bekleniyor"
@@ -197,11 +207,18 @@ fun GameBoosterDashboard(
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                onRefreshShizuku()
-                canWriteSettings = Settings.System.canWrite(context)
-                canDrawOverlays = Settings.canDrawOverlays(context)
-                canUseDnd = nm.isNotificationPolicyAccessGranted
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> {
+                    isAppResumed = true
+                    onRefreshShizuku()
+                    canWriteSettings = Settings.System.canWrite(context)
+                    canDrawOverlays = Settings.canDrawOverlays(context)
+                    canUseDnd = nm.isNotificationPolicyAccessGranted
+                }
+                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
+                    isAppResumed = false
+                }
+                else -> {}
             }
         }
         lifecycleOwner?.lifecycle?.addObserver(observer)
@@ -240,11 +257,16 @@ fun GameBoosterDashboard(
             }
         }
         installedApps = optimizer.getInstalledUserApps()
-        while (isActive) {
+    }
+
+    // Yalnızca uygulama ekranda açıkken (ON_RESUME) çalışır; oyuna geçince arka planda pil tüketmez!
+    LaunchedEffect(isAppResumed, selectedPingServer) {
+        if (!isAppResumed) return@LaunchedEffect
+        while (isActive && isAppResumed) {
             onRefreshShizuku()
             val ping = optimizer.measureRealPing()
             metrics = optimizer.getHardwareMetrics(ping)
-            delay(2000)
+            delay(2200)
         }
     }
 
@@ -292,15 +314,15 @@ fun GameBoosterDashboard(
                     Spacer(Modifier.width(10.dp))
                     Column {
                         Text(
-                            text = "ULTRA GAME ENGINE v3",
+                            text = "ULTRA GAME ENGINE v4",
                             color = Color(0xFF00E676),
                             fontSize = 18.sp,
                             fontWeight = FontWeight.ExtraBold
                         )
                         Text(
                             text = statusSubtitle,
-                            color = Color(0xFF94A3B8),
-                            fontSize = 11.5.sp
+                            color = if (metrics.thermalThrottledByGuard) Color(0xFFF87171) else Color(0xFF94A3B8),
+                            fontSize = 11.sp
                         )
                     }
                 }
@@ -316,7 +338,7 @@ fun GameBoosterDashboard(
                             context.startActivity(intent)
                         } else {
                             startOrUpdateOverlayService()
-                            Toast.makeText(context, "Oyun İçi HUD ve Kilitler Başlatıldı!", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Oyun İçi HUD Başlatıldı!", Toast.LENGTH_SHORT).show()
                         }
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
@@ -333,18 +355,25 @@ fun GameBoosterDashboard(
             when (selectedTab) {
                 0 -> CockpitTab(
                     metrics = metrics,
+                    supportedHzList = supportedHzList,
                     targetHz = targetHz,
                     downscaleRatio = downscaleRatio,
+                    pingServer = selectedPingServer,
                     onSelectHz = { hz ->
                         targetHz = hz
                         prefs.edit().putInt("target_hz", hz).apply()
-                        scope.launch {
-                            val locked = optimizer.lockSystemRefreshRate(hz)
-                            customStatusOverride = if (locked) {
-                                "Global Ekran ${hz}Hz Olarak Kilitlendi ✅"
-                            } else {
-                                "Hedef ${hz}Hz Seçildi (Tam Kilit İçin Shizuku veya Sistem Ayar İzni Ver)"
+                        // Eğer zaten aktif bir oyun/boost oturumu varsa anında güncelle, yoksa sadece hedef olarak kaydet
+                        if (optimizer.isBoostSessionActive()) {
+                            scope.launch {
+                                val verified = optimizer.lockSystemRefreshRate(hz)
+                                customStatusOverride = if (verified) {
+                                    "Global Ekran ${hz}Hz Kilidi Doğrulandı ✅"
+                                } else {
+                                    "${hz}Hz yazılamadı (Shizuku veya Sistem Ayar İzni gerekli)"
+                                }
                             }
+                        } else {
+                            customStatusOverride = "Hedef ${hz}Hz seçildi (Sistemi Hazırla veya Oyun Başlat ile devreye girer)."
                         }
                     },
                     onSelectDownscale = { ratio ->
@@ -353,15 +382,15 @@ fun GameBoosterDashboard(
                         scope.launch {
                             val updatedCount = optimizer.updateActiveGamesDownscale(ratio)
                             if (updatedCount > 0) {
-                                customStatusOverride = "$updatedCount aktif oyunun çözünürlük ölçeği ($ratio) güncellendi."
+                                customStatusOverride = "$updatedCount aktif oyunun ölçeği ($ratio) güncellendi."
                             } else {
-                                customStatusOverride = "Varsayılan oyun ölçeği ($ratio) kaydedildi (Oyunlar sekmesinde uygulanır)."
+                                customStatusOverride = "Oyun çözünürlük ölçeği ($ratio) seçildi."
                             }
                         }
                     },
                     onTurboBoost = {
                         scope.launch {
-                            customStatusOverride = "Sistem optimize ediliyor..."
+                            customStatusOverride = "Sistem hazırlanıyor & doğrulanıyor..."
                             val res = optimizer.executeDeepBoost(targetHz)
                             if (autoDnd) optimizer.setDoNotDisturb(true)
 
@@ -372,10 +401,14 @@ fun GameBoosterDashboard(
                                 optimizer.setCpuSustainedWakeLock(keepAwake)
                             }
 
-                            val ping = optimizer.measureRealPing()
-                            metrics = optimizer.getHardwareMetrics(ping)
-                            val hzText = if (res.hzLocked) "${targetHz}Hz Kilitli" else "${targetHz}Hz Hedef"
-                            customStatusOverride = "$hzText • ${res.targetedAppCount} uygulama • Açılan RAM: ${res.freedRamMb} MB"
+                            metrics = optimizer.getHardwareMetrics(res.afterPingMs)
+                            val hzBadge = if (res.hzLockedVerified) "${targetHz}Hz Doğrulandı ✅" else "${targetHz}Hz (İzin Bekliyor)"
+                            val pingDiff = if (res.beforePingMs > 0 && res.afterPingMs > 0) {
+                                "Ping: ${res.beforePingMs}→${res.afterPingMs}ms"
+                            } else {
+                                "Ping: ${res.afterPingMs}ms"
+                            }
+                            customStatusOverride = "$hzBadge • Boş RAM: ${res.beforeAvailRamMb}→${res.afterAvailRamMb}MB (+${res.freedRamMb}MB) • $pingDiff"
                         }
                     },
                     onRestoreNormal = {
@@ -396,7 +429,7 @@ fun GameBoosterDashboard(
                     onLaunchGame = { app ->
                         scope.launch {
                             val res = optimizer.executeDeepBoost(targetHz)
-                            val shizukuApplied = optimizer.applyShizukuGameOptimization(app.packageName, downscaleRatio)
+                            val shizukuVerified = optimizer.applyShizukuGameOptimization(app.packageName, downscaleRatio)
                             if (autoDnd) optimizer.setDoNotDisturb(true)
 
                             if (showFloatingHud && Settings.canDrawOverlays(context)) {
@@ -406,13 +439,13 @@ fun GameBoosterDashboard(
                                 optimizer.setCpuSustainedWakeLock(keepAwake)
                             }
 
-                            val modeMsg = if (shizukuApplied) {
-                                "Shizuku Performans + Ölçek ($downscaleRatio) + ${targetHz}Hz"
+                            val modeMsg = if (shizukuVerified) {
+                                "Shizuku Doğrulandı (Ölçek: $downscaleRatio, ${targetHz}Hz)"
                             } else {
-                                "Standart ${targetHz}Hz (${res.freedRamMb} MB Açılan RAM)"
+                                "Standart Mod (Boş RAM: ${res.afterAvailRamMb} MB)"
                             }
 
-                            Toast.makeText(context, "${app.name}: $modeMsg ile açılıyor!", Toast.LENGTH_LONG).show()
+                            Toast.makeText(context, "${app.name}: $modeMsg", Toast.LENGTH_LONG).show()
 
                             val launchIntent = context.packageManager.getLaunchIntentForPackage(app.packageName)
                             if (launchIntent != null) {
@@ -427,6 +460,11 @@ fun GameBoosterDashboard(
                     canWriteSettings = canWriteSettings,
                     canDrawOverlays = canDrawOverlays,
                     canUseDnd = canUseDnd,
+                    selectedPingServer = selectedPingServer,
+                    onPingServerChange = { server ->
+                        selectedPingServer = server
+                        optimizer.setSelectedPingServer(server)
+                    },
                     autoDnd = autoDnd,
                     onAutoDndChange = {
                         autoDnd = it
@@ -462,8 +500,10 @@ fun GameBoosterDashboard(
 @Composable
 fun CockpitTab(
     metrics: HardwareMetrics,
+    supportedHzList: List<Int>,
     targetHz: Int,
     downscaleRatio: String,
+    pingServer: PingServer,
     onSelectHz: (Int) -> Unit,
     onSelectDownscale: (String) -> Unit,
     onTurboBoost: () -> Unit,
@@ -478,14 +518,14 @@ fun CockpitTab(
                 modifier = Modifier.weight(1f),
                 title = "GÜNCEL EKRAN HZ",
                 value = "${metrics.currentDisplayHz} Hz",
-                subValue = if (metrics.shizukuActive) "Shizuku SurfaceFlinger Hazır" else "Standart Ekran Yenileme",
+                subValue = if (metrics.shizukuActive) "SF Çizim FPS Hazır" else "Donanım Yenileme Hızı",
                 accentColor = Color(0xFF00E676)
             )
             MetricCard(
                 modifier = Modifier.weight(1f),
-                title = "BELLEK (GERÇEK RAM)",
-                value = "%${metrics.ramPercent}",
-                subValue = "${metrics.usedRamMb} / ${metrics.totalRamMb} MB",
+                title = "BELLEK (BOŞ / TOPLAM)",
+                value = "${metrics.availRamMb} MB Boş",
+                subValue = "Kullanılan: %${metrics.ramPercent} (${metrics.usedRamMb}/${metrics.totalRamMb}MB)",
                 accentColor = Color(0xFF38BDF8)
             )
         }
@@ -500,14 +540,14 @@ fun CockpitTab(
                 modifier = Modifier.weight(1f),
                 title = if (metrics.cpuTemp != null) "CPU & BATARYA ISISI" else "BATARYA ISISI",
                 value = if (metrics.cpuTemp != null) "${metrics.cpuTemp}°C" else "${metrics.batteryTemp}°C",
-                subValue = "Pil Sensörü: ${metrics.batteryTemp}°C",
-                accentColor = if (metrics.batteryTemp >= 42f) Color(0xFFEF4444) else Color(0xFFF59E0B)
+                subValue = if (metrics.thermalThrottledByGuard) "⚠️ 43°C Termostat Korumasında!" else "Pil: ${metrics.batteryTemp}°C (Sınır: 43°C)",
+                accentColor = if (metrics.batteryTemp >= 42f || metrics.thermalThrottledByGuard) Color(0xFFEF4444) else Color(0xFFF59E0B)
             )
             MetricCard(
                 modifier = Modifier.weight(1f),
-                title = "AB (FRANKFURT) PİNG",
+                title = "GERÇEK TCP PİNG",
                 value = if (metrics.pingMs > 0) "${metrics.pingMs} ms" else "Ölçülüyor",
-                subValue = "AWS EU-Central TCP",
+                subValue = pingServer.label,
                 accentColor = Color(0xFFA855F7)
             )
         }
@@ -515,7 +555,7 @@ fun CockpitTab(
         Spacer(Modifier.height(14.dp))
 
         Text(
-            text = "1. GLOBAL EKRAN YENİLEME HIZI KİLİDİ (SİSTEM GENELİ)",
+            text = "1. DONANIMSAL EKRAN HZ SEÇİMİ (CİHAZIN DESTEKLEDİĞİ GERÇEK MODLAR)",
             color = Color(0xFF94A3B8),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold
@@ -526,12 +566,13 @@ fun CockpitTab(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            listOf(
-                Triple(60, "60 Hz", "Pil Tasarrufu"),
-                Triple(90, "90 Hz", "Sabit Akıcı"),
-                Triple(120, "120 Hz", "Maksimum Hz")
-            ).forEach { (hz, title, sub) ->
+            supportedHzList.forEach { hz ->
                 val isSelected = targetHz == hz
+                val subLabel = when {
+                    hz <= 60 -> "Pil Tasarrufu"
+                    hz == supportedHzList.last() -> "Maksimum Hz"
+                    else -> "Dengeli Akıcı"
+                }
                 Column(
                     modifier = Modifier
                         .weight(1f)
@@ -547,12 +588,12 @@ fun CockpitTab(
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Text(
-                        text = title,
+                        text = "$hz Hz",
                         color = if (isSelected) Color(0xFF00E676) else Color.White,
                         fontWeight = FontWeight.ExtraBold,
                         fontSize = 14.sp
                     )
-                    Text(text = sub, color = Color(0xFF94A3B8), fontSize = 10.sp)
+                    Text(text = subLabel, color = Color(0xFF94A3B8), fontSize = 10.sp)
                 }
             }
         }
@@ -560,7 +601,7 @@ fun CockpitTab(
         Spacer(Modifier.height(12.dp))
 
         Text(
-            text = "2. SHIZUKU OYUN ÇÖZÜNÜRLÜK ÖLÇEĞİ (OYUN BAŞLATILIRKEN UYGULANIR)",
+            text = "2. SHIZUKU OYUN ÇÖZÜNÜRLÜK ÖLÇEĞİ (RESMİ 0.1 ADIMLI GAMEMANAGER)",
             color = Color(0xFF94A3B8),
             fontSize = 11.sp,
             fontWeight = FontWeight.Bold
@@ -573,8 +614,8 @@ fun CockpitTab(
         ) {
             listOf(
                 Triple("disable", "%100 Orijinal", "Tam Çözünürlük"),
-                Triple("0.85", "%85 Dengeli", "Önerilen +FPS"),
-                Triple("0.75", "%75 Rekabetçi", "Maksimum +FPS")
+                Triple("0.8", "%80 Dengeli", "Önerilen +FPS"),
+                Triple("0.7", "%70 Rekabetçi", "Maksimum +FPS")
             ).forEach { (ratio, title, sub) ->
                 val isSelected = downscaleRatio == ratio
                 Column(
@@ -621,7 +662,7 @@ fun CockpitTab(
                 Icon(Icons.Default.Bolt, contentDescription = null, tint = Color.Black)
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = "${targetHz} HZ KİLİTLE & SİSTEMİ HAZIRLA",
+                    text = "${targetHz} HZ DOĞRULA & SİSTEMİ HAZIRLA",
                     color = Color.Black,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 14.sp
@@ -665,9 +706,9 @@ fun MetricCard(
     ) {
         Text(text = title, color = Color(0xFF94A3B8), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(4.dp))
-        Text(text = value, color = accentColor, fontSize = 23.sp, fontWeight = FontWeight.ExtraBold)
+        Text(text = value, color = accentColor, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold)
         Spacer(Modifier.height(4.dp))
-        Text(text = subValue, color = Color(0xFFCBD5E1), fontSize = 10.5.sp)
+        Text(text = subValue, color = Color(0xFFCBD5E1), fontSize = 10.sp)
     }
 }
 
@@ -763,6 +804,8 @@ fun EngineSettingsTab(
     canWriteSettings: Boolean,
     canDrawOverlays: Boolean,
     canUseDnd: Boolean,
+    selectedPingServer: PingServer,
+    onPingServerChange: (PingServer) -> Unit,
     autoDnd: Boolean,
     onAutoDndChange: (Boolean) -> Unit,
     wifiLowLatency: Boolean,
@@ -802,7 +845,7 @@ fun EngineSettingsTab(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "Gerçek oyun FPS'ini (SurfaceFlinger) okumak, oyunun çözünürlüğünü donanımsal ölçeklemek (Downscale) ve GOS sıcaklık hız kesmesini durdurmak için Shizuku yetkisi gerekir.",
+                    text = "SurfaceFlinger kare hızını okumak, oyunun çözünürlüğünü donanımsal ölçeklemek (0.8 / 0.7 Downscale) ve 43°C termostat korumalı performans modunu yönetmek için Shizuku yetkisi gerekir.",
                     color = Color(0xFFCBD5E1),
                     fontSize = 11.5.sp
                 )
@@ -839,9 +882,57 @@ fun EngineSettingsTab(
         }
 
         item {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(Color(0xFF131B2E))
+                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
+                    .padding(14.dp)
+            ) {
+                Text(
+                    text = "PİNG ÖLÇÜM SUNUCUSU SEÇİMİ",
+                    color = Color.White,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PingServer.values().forEach { server ->
+                        val selected = selectedPingServer == server
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (selected) Color(0xFFA855F7).copy(alpha = 0.25f) else Color(0xFF090D16))
+                                .border(
+                                    1.dp,
+                                    if (selected) Color(0xFFA855F7) else Color(0xFF1E293B),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .clickable { onPingServerChange(server) }
+                                .padding(vertical = 8.dp, horizontal = 4.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = server.label,
+                                color = if (selected) Color(0xFFE9D5FF) else Color(0xFF94A3B8),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        item {
             SettingToggleRow(
-                title = "Oyun İçi HUD Paneli (Ön Plan Kilit Taşıyıcı)",
-                subtitle = "Oyun üstünde gerçek FPS/Hz gösterir ve Wi-Fi/Ekran kilitlerinin arka planda düşmesini önler.",
+                title = "Oyun İçi HUD Paneli",
+                subtitle = "Oyun üstünde SF Çizim FPS/Hz, 43°C Termostat durumu ve ekran uyanıklık kilidi sağlar.",
                 checked = showFloatingHud,
                 onCheckedChange = onShowHudChange
             )
@@ -856,8 +947,8 @@ fun EngineSettingsTab(
         }
         item {
             SettingToggleRow(
-                title = "Düşük Gecikme Wi-Fi Kilidi",
-                subtitle = "HUD açıkken Wi-Fi çipini düşük gecikme (Low Latency) modunda tutar.",
+                title = "Wi-Fi Radyo Uyanıklık Kilidi",
+                subtitle = "Wi-Fi çipinin uyku moduna girmesini önler (Not: Android 10+ düşük gecikme modunu ön plan aktiviteleriyle sınırlar).",
                 checked = wifiLowLatency,
                 onCheckedChange = onWifiLatencyChange
             )
