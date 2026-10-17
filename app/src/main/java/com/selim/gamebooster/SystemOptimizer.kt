@@ -121,7 +121,6 @@ class SystemOptimizer private constructor(context: Context) {
     }
 
     init {
-        // Eski sürümden kalan 0.85 veya 0.75 değerlerini standart 0.8 / 0.7 adımlarına taşı
         val savedScale = prefs.getString("downscale", "0.8")
         if (savedScale == "0.85") prefs.edit().putString("downscale", "0.8").apply()
         if (savedScale == "0.75") prefs.edit().putString("downscale", "0.7").apply()
@@ -156,30 +155,26 @@ class SystemOptimizer private constructor(context: Context) {
         }
     }
 
-    /**
-     * Gerçek Zaman Aşımı (Timeout) Korumalı ADB Shell Çalıştırıcı.
-     * Çıktı akışlarını (stdout/stderr) paralel okur ve önce waitFor(timeout) bekler;
-     * böylece takılan bir komut asla readText() üzerinde sonsuz bloklanma yaratmaz.
-     */
     suspend fun runShizukuShell(command: String, timeoutMs: Long = 2000L): String? = withContext(Dispatchers.IO) {
         if (!hasShizukuPermission()) return@withContext null
         val method = shizukuNewProcessMethod ?: return@withContext null
 
-        var process: Process? = null
+        var processRef: Process? = null
         try {
-            process = method.invoke(null, arrayOf("sh", "-c", command), null, null) as? Process
+            val proc = method.invoke(null, arrayOf("sh", "-c", command), null, null) as? Process
                 ?: return@withContext null
+            processRef = proc
 
             val stdoutDeferred = async(Dispatchers.IO) {
                 try {
-                    process.inputStream.bufferedReader().use { it.readText() }
+                    proc.inputStream.bufferedReader().use { it.readText() }
                 } catch (_: Throwable) {
                     ""
                 }
             }
             val stderrDeferred = async(Dispatchers.IO) {
                 try {
-                    process.errorStream.bufferedReader().use { it.readText() }
+                    proc.errorStream.bufferedReader().use { it.readText() }
                 } catch (_: Throwable) {
                     ""
                 }
@@ -187,9 +182,9 @@ class SystemOptimizer private constructor(context: Context) {
 
             val completedInTime = withTimeoutOrNull(timeoutMs) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+                    proc.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
                 } else {
-                    process.waitFor()
+                    proc.waitFor()
                     true
                 }
             } ?: false
@@ -197,9 +192,9 @@ class SystemOptimizer private constructor(context: Context) {
             if (!completedInTime) {
                 try {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        process.destroyForcibly()
+                        proc.destroyForcibly()
                     } else {
-                        process.destroy()
+                        proc.destroy()
                     }
                 } catch (_: Throwable) {}
                 stdoutDeferred.cancel()
@@ -214,10 +209,10 @@ class SystemOptimizer private constructor(context: Context) {
             null
         } finally {
             try {
-                process?.inputStream?.close()
-                process?.errorStream?.close()
-                process?.outputStream?.close()
-                process?.destroy()
+                processRef?.inputStream?.close()
+                processRef?.errorStream?.close()
+                processRef?.outputStream?.close()
+                processRef?.destroy()
             } catch (_: Throwable) {}
         }
     }
@@ -245,10 +240,6 @@ class SystemOptimizer private constructor(context: Context) {
         return cachedCpuThermalPath
     }
 
-    /**
-     * SurfaceFlinger kompozitör kare hızını ve CPU sıcaklığını tek kabuk çağrısında okur.
-     * HUD'un kendi çizim karesini (1 flip) hesaptan düşerek yapay FPS şişmesini engeller.
-     */
     suspend fun readShizukuTelemetry(includeFps: Boolean, subtractHudFrame: Boolean = true): Pair<Int?, Float?> = withContext(Dispatchers.IO) {
         if (!hasShizukuPermission()) return@withContext Pair(null, null)
 
@@ -277,7 +268,6 @@ class SystemOptimizer private constructor(context: Context) {
                 if (currentFlips != null) {
                     if (lastSurfaceFlipCount > 0L && nowMs > lastSurfaceFlipTimeMs) {
                         val rawDelta = currentFlips - lastSurfaceFlipCount
-                        // HUD'un kendi güncelleme karesini düşerek daha dürüst ölçüm sağla
                         val adjustedFlips = if (subtractHudFrame && rawDelta > 1L) rawDelta - 1L else rawDelta
                         val deltaMs = nowMs - lastSurfaceFlipTimeMs
                         if (adjustedFlips >= 0 && deltaMs >= 250) {
@@ -307,11 +297,6 @@ class SystemOptimizer private constructor(context: Context) {
         Pair(calculatedFps, cpuTempC)
     }
 
-    /**
-     * Otomatik Termostat Koruması (S22 Ultra / 8 Gen 1 / Exynos Isı Güvenliği):
-     * Batarya 43°C veya CPU 82°C sınırına ulaşırsa sabit performans modunu kapatır
-     * ve Samsung GOS / sistem termal kontrolünü otomatik devreye sokar.
-     */
     suspend fun checkAndApplyThermalGuard(batteryTemp: Float, cpuTemp: Float?): Boolean = withContext(Dispatchers.IO) {
         val isOverheating = batteryTemp >= SAFE_BATTERY_TEMP_LIMIT ||
                 (cpuTemp != null && cpuTemp >= SAFE_CPU_TEMP_LIMIT)
@@ -373,10 +358,6 @@ class SystemOptimizer private constructor(context: Context) {
         )
     }
 
-    /**
-     * Cihaz ekranının donanımsal olarak gerçekten desteklediği yenileme hızlarını (Hz) döndürür.
-     * Örneğin S22 Ultra'da 90 Hz donanım modu yoksa uydurma mod göstermez.
-     */
     fun getSupportedRefreshRates(): List<Int> {
         return try {
             val dm = appContext.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
@@ -431,10 +412,6 @@ class SystemOptimizer private constructor(context: Context) {
         }
     }
 
-    /**
-     * Tüm sistem ve oyun ayarlarını (Shizuku'suz modda null olan anahtarları silmek dahil)
-     * %100 orijinal durumuna geri yükler.
-     */
     suspend fun restoreOriginalSystemState() = stateMutex.withLock {
         withContext(Dispatchers.IO) {
             setLowLatencyWifiLock(false)
@@ -520,10 +497,6 @@ class SystemOptimizer private constructor(context: Context) {
         } catch (_: Exception) {}
     }
 
-    /**
-     * Global ekran Hz kilidini uygular ve ardından değeri geri okuyarak (Read-Back Verification)
-     * gerçekten uygulanıp uygulanmadığını doğrular.
-     */
     suspend fun lockSystemRefreshRate(targetHz: Int): Boolean = withContext(Dispatchers.IO) {
         backupOriginalSystemState()
         val rate = targetHz.toFloat()
@@ -552,11 +525,6 @@ class SystemOptimizer private constructor(context: Context) {
         }
     }
 
-    /**
-     * Shizuku ile seçilen oyuna gerçek Android Game Mode ve GPU Downscale (0.8 / 0.7) uygular.
-     * Oyunun ölçeği anında alması için önce arka plandaki önbellek sürecini kapatır
-     * ve komut çıktısını kontrol ederek başarıyı doğrular.
-     */
     suspend fun applyShizukuGameOptimization(packageName: String, downscaleRatio: String): Boolean = withContext(Dispatchers.IO) {
         if (!hasShizukuPermission()) return@withContext false
         if (!isValidPackageName(packageName)) return@withContext false
@@ -569,7 +537,6 @@ class SystemOptimizer private constructor(context: Context) {
             updatedSet.add(packageName)
             prefs.edit().putStringSet(KEY_OPTIMIZED_PACKAGES, updatedSet).apply()
 
-            // Oyunun yeni çözünürlük ölçeğiyle temiz başlaması için arka plan sürecini sonlandır
             val gameCmd = if (safeRatio == "disable") {
                 "cmd game reset $packageName; " +
                         "device_config delete game_overlay $packageName; " +
@@ -667,10 +634,6 @@ class SystemOptimizer private constructor(context: Context) {
         }
     }
 
-    /**
-     * Dürüst Sistem Hazırlama:
-     * İşlem öncesi ve sonrası boş RAM ile Ping değerlerini ayrı ayrı ölçüp şeffafça raporlar.
-     */
     suspend fun executeDeepBoost(targetHz: Int): BoostResult = withContext(Dispatchers.IO) {
         backupOriginalSystemState()
         val am = appContext.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -714,8 +677,6 @@ class SystemOptimizer private constructor(context: Context) {
         }
 
         val hzVerified = lockSystemRefreshRate(targetHz)
-
-        // Süreçlerin kapanması ve bellek tablolarının güncellenmesi için gerçekçi bekleme
         delay(600)
 
         val afterMem = ActivityManager.MemoryInfo()
