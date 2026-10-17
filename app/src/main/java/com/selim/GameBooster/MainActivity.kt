@@ -37,7 +37,6 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -45,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -104,17 +104,12 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-/**
- * Uygulama içi yerleşik Vektör/Canvas Siber Kalkan & Şimşek Logosu.
- * Harici PNG/Drawable bağımlılığı olmadan her çözünürlükte keskin çizilir.
- */
 @Composable
 fun CyberBoosterLogo(modifier: Modifier = Modifier, size: Dp = 40.dp) {
     Canvas(modifier = modifier.size(size)) {
         val w = this.size.width
         val h = this.size.height
 
-        // 1. Altıgen Kalkan Gövdesi
         val shieldPath = Path().apply {
             moveTo(w * 0.5f, h * 0.06f)
             lineTo(w * 0.90f, h * 0.25f)
@@ -144,7 +139,6 @@ fun CyberBoosterLogo(modifier: Modifier = Modifier, size: Dp = 40.dp) {
             style = Stroke(width = w * 0.06f, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
 
-        // 2. İç Turbo Şimşek Çekirdeği
         val boltPath = Path().apply {
             moveTo(w * 0.56f, h * 0.20f)
             lineTo(w * 0.32f, h * 0.52f)
@@ -171,7 +165,7 @@ fun GameBoosterDashboard(
     onRefreshShizuku: () -> Unit
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = context as? LifecycleOwner
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences(SystemOptimizer.PREFS_NAME, Context.MODE_PRIVATE) }
     val nm = remember { context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
@@ -185,7 +179,6 @@ fun GameBoosterDashboard(
     var showFloatingHud by remember { mutableStateOf(prefs.getBoolean("show_hud", true)) }
     var keepAwake by remember { mutableStateOf(prefs.getBoolean("keep_awake", true)) }
 
-    // İzin durumları (Ayarlardan geri dönüldüğünde ON_RESUME ile otomatik güncellenir)
     var canWriteSettings by remember { mutableStateOf(Settings.System.canWrite(context)) }
     var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
     var canUseDnd by remember { mutableStateOf(nm.isNotificationPolicyAccessGranted) }
@@ -202,7 +195,6 @@ fun GameBoosterDashboard(
         "Standart Mod • Shizuku Bekleniyor"
     }
 
-    // Yaşam Döngüsü Dinleyicisi: Kullanıcı Ayarlar'dan izin verip döndüğü an butonlar güncellenir
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -212,9 +204,9 @@ fun GameBoosterDashboard(
                 canUseDnd = nm.isNotificationPolicyAccessGranted
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
+        lifecycleOwner?.lifecycle?.addObserver(observer)
         onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
+            lifecycleOwner?.lifecycle?.removeObserver(observer)
         }
     }
 
@@ -373,8 +365,6 @@ fun GameBoosterDashboard(
                             val res = optimizer.executeDeepBoost(targetHz)
                             if (autoDnd) optimizer.setDoNotDisturb(true)
 
-                            // Wi-Fi Düşük Gecikme ve Ekran Uyanık Tutma kilitlerinin oyun içinde
-                            // düşmemesi için izin varsa ön plan HUD servisini de devreye sokarız.
                             if (showFloatingHud && Settings.canDrawOverlays(context)) {
                                 startOrUpdateOverlayService()
                             } else {
