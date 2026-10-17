@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -31,6 +32,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 class GameOverlayService : Service() {
 
@@ -42,6 +44,7 @@ class GameOverlayService : Service() {
     private var hudLayoutParams: WindowManager.LayoutParams? = null
     private var isPanelExpanded = false
     private var targetHz = 120
+    private var supportedRates = listOf(60, 120)
 
     companion object {
         const val ACTION_STOP_OVERLAY = "ACTION_STOP_OVERLAY"
@@ -52,13 +55,19 @@ class GameOverlayService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun dpToPx(dp: Float): Int {
+        return (dp * resources.displayMetrics.density).roundToInt()
+    }
+
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
         optimizer = SystemOptimizer.getInstance(this)
+        supportedRates = optimizer.getSupportedRefreshRates()
 
         val prefs = getSharedPreferences(SystemOptimizer.PREFS_NAME, Context.MODE_PRIVATE)
-        targetHz = prefs.getInt("target_hz", 120)
+        val savedHz = prefs.getInt("target_hz", supportedRates.lastOrNull() ?: 120)
+        targetHz = if (savedHz in supportedRates) savedHz else (supportedRates.lastOrNull() ?: 120)
 
         startForegroundNotification()
         applyUserPreferencesAndLocks()
@@ -85,13 +94,11 @@ class GameOverlayService : Service() {
         return START_STICKY
     }
 
-    /**
-     * Kullanıcının SharedPreferences'ta seçtiği kilitleri (Wi-Fi, DND, WakeLock, Hz)
-     * zorlama yapmadan birebir uygular.
-     */
     private fun applyUserPreferencesAndLocks() {
         val prefs = getSharedPreferences(SystemOptimizer.PREFS_NAME, Context.MODE_PRIVATE)
-        targetHz = prefs.getInt("target_hz", 120)
+        val savedHz = prefs.getInt("target_hz", supportedRates.lastOrNull() ?: 120)
+        targetHz = if (savedHz in supportedRates) savedHz else (supportedRates.lastOrNull() ?: 120)
+
         val wifiLowLatency = prefs.getBoolean("wifi_lock", true)
         val autoDnd = prefs.getBoolean("auto_dnd", true)
         val keepAwake = prefs.getBoolean("keep_awake", true)
@@ -126,8 +133,6 @@ class GameOverlayService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
         if (keepScreenOn) {
-            // HUD penceresi oyun üzerinde çizildiği için FLAG_KEEP_SCREEN_ON oyun sırasında
-            // ekranın kararmasını %100 gerçek olarak engeller.
             flags = flags or WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
         }
         return flags
@@ -146,11 +151,11 @@ class GameOverlayService : Service() {
             Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Ultra Game Engine Aktif (${targetHz}Hz)")
                 .setContentText("HUD çalışıyor • Kapatıldığında tüm ayarlar orijinale döner.")
-                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setSmallIcon(android.R.drawable.ic_Dialog_Info)
                 .addAction(
                     Notification.Action.Builder(
-                        android.R.drawable.ic_delete,
-                        "Kapat & Normale Dön",
+                        android.R.drawable.ic_menu_close_clear_cancel,
+                        "Kapat & Sıfırla",
                         stopPending
                     ).build()
                 )
@@ -161,7 +166,7 @@ class GameOverlayService : Service() {
             Notification.Builder(this)
                 .setContentTitle("Ultra Game Engine Aktif (${targetHz}Hz)")
                 .setContentText("HUD çalışıyor • Kapatıldığında tüm ayarlar orijinale döner.")
-                .setSmallIcon(android.R.drawable.ic_media_play)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setOngoing(true)
                 .build()
         }
@@ -172,12 +177,17 @@ class GameOverlayService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 CHANNEL_ID,
-                "Oyun Motoru Aktif",
+                "Oyun Motoru HUD Servisi",
                 NotificationManager.IMPORTANCE_LOW
             )
             nm.createNotificationChannel(channel)
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+        val notif = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIFICATION_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(NOTIFICATION_ID, notif)
+        }
     }
 
     private fun updateForegroundNotificationText() {
@@ -207,8 +217,8 @@ class GameOverlayService : Service() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 24
-            y = 140
+            x = dpToPx(12f)
+            y = dpToPx(56f)
         }
         hudLayoutParams = params
 
@@ -216,10 +226,10 @@ class GameOverlayService : Service() {
             orientation = LinearLayout.VERTICAL
             background = GradientDrawable().apply {
                 setColor(Color.parseColor("#E6090D16"))
-                cornerRadius = 30f
-                setStroke(3, Color.parseColor("#00E676"))
+                cornerRadius = dpToPx(14f).toFloat()
+                setStroke(dpToPx(1.5f), Color.parseColor("#00E676"))
             }
-            setPadding(24, 14, 24, 14)
+            setPadding(dpToPx(12f), dpToPx(8f), dpToPx(12f), dpToPx(8f))
         }
 
         val statusTextView = TextView(this).apply {
@@ -232,14 +242,14 @@ class GameOverlayService : Service() {
         val expandedLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
-            setPadding(0, 14, 0, 0)
+            setPadding(0, dpToPx(8f), 0, 0)
         }
 
         val telemetryDetailText = TextView(this).apply {
             text = "Mod: Kontrol ediliyor..."
             setTextColor(Color.parseColor("#CBD5E1"))
             textSize = 10.5f
-            setPadding(0, 0, 0, 10)
+            setPadding(0, 0, 0, dpToPx(6f))
         }
 
         fun createMiniButton(label: String, bgColor: String, onClick: () -> Unit): Button {
@@ -248,55 +258,52 @@ class GameOverlayService : Service() {
                 textSize = 11f
                 isAllCaps = false
                 setTextColor(Color.WHITE)
+                setPadding(dpToPx(8f), 0, dpToPx(8f), 0)
                 background = GradientDrawable().apply {
                     setColor(Color.parseColor(bgColor))
-                    cornerRadius = 18f
+                    cornerRadius = dpToPx(8f).toFloat()
                 }
                 val lp = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
-                    80
-                ).apply { topMargin = 8 }
+                    dpToPx(36f)
+                ).apply { topMargin = dpToPx(5f) }
                 layoutParams = lp
                 setOnClickListener { onClick() }
             }
         }
 
         var hzSwitchBtn: Button? = null
-        hzSwitchBtn = createMiniButton("🔥 Hedef Hz: ${targetHz}Hz (60/90/120 Döngüsü)", "#059669") {
-            targetHz = when (targetHz) {
-                60 -> 90
-                90 -> 120
-                else -> 60
-            }
+        val cycleText = supportedRates.joinToString("/")
+        hzSwitchBtn = createMiniButton("🔥 Hedef Hz: ${targetHz}Hz ($cycleText)", "#059669") {
+            val currentIndex = supportedRates.indexOf(targetHz)
+            val nextIndex = if (currentIndex == -1 || currentIndex + 1 >= supportedRates.size) 0 else currentIndex + 1
+            targetHz = supportedRates[nextIndex]
+
             getSharedPreferences(SystemOptimizer.PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putInt("target_hz", targetHz).apply()
 
-            hzSwitchBtn?.text = "🔥 Hedef Hz: ${targetHz}Hz (60/90/120 Döngüsü)"
+            hzSwitchBtn?.text = "🔥 Hedef Hz: ${targetHz}Hz ($cycleText)"
             serviceScope.launch {
-                val locked = optimizer.lockSystemRefreshRate(targetHz)
+                val verified = optimizer.lockSystemRefreshRate(targetHz)
                 updateForegroundNotificationText()
-                val msg = if (locked) {
-                    "${targetHz}Hz Global Ekran Kilidi Uygulandı!"
+                val msg = if (verified) {
+                    "${targetHz}Hz Global Kilit Doğrulandı ✅"
                 } else {
-                    "Hedef ${targetHz}Hz seçildi (Kilit için Shizuku veya Ayar İzni gerekli)"
+                    "${targetHz}Hz doğrulanamadı (Shizuku veya Ayar İzni kontrol et)"
                 }
                 Toast.makeText(this@GameOverlayService, msg, Toast.LENGTH_SHORT).show()
             }
         }
 
-        val boostBtn = createMiniButton("🚀 Arka Planı Temizle", "#2563EB") {
+        val boostBtn = createMiniButton("🚀 Önbellek Temizle", "#2563EB") {
             serviceScope.launch {
                 val res = optimizer.executeDeepBoost(targetHz)
-                val detail = if (res.shizukuDeepClean) {
-                    "ADB Deep Clean + ${res.targetedAppCount} uygulama • Açılan RAM: ${res.freedRamMb} MB"
-                } else {
-                    "${res.targetedAppCount} kullanıcı uygulaması • Açılan RAM: ${res.freedRamMb} MB"
-                }
+                val detail = "Boş RAM: ${res.beforeAvailRamMb}→${res.afterAvailRamMb} MB (+${res.freedRamMb} MB)"
                 Toast.makeText(this@GameOverlayService, detail, Toast.LENGTH_SHORT).show()
             }
         }
 
-        val closeBtn = createMiniButton("❌ Kapat & Ayarları Normale Döndür", "#DC2626") {
+        val closeBtn = createMiniButton("❌ Kapat & Orijinale Dön", "#DC2626") {
             stopSelf()
         }
 
@@ -312,6 +319,7 @@ class GameOverlayService : Service() {
         var initialY = 0
         var initialTouchX = 0f
         var initialTouchY = 0f
+        val clickThresholdPx = dpToPx(8f)
 
         statusTextView.setOnTouchListener { _, event ->
             when (event.action) {
@@ -333,7 +341,7 @@ class GameOverlayService : Service() {
                 MotionEvent.ACTION_UP -> {
                     val movedX = abs(event.rawX - initialTouchX)
                     val movedY = abs(event.rawY - initialTouchY)
-                    if (movedX < 15 && movedY < 15) {
+                    if (movedX < clickThresholdPx && movedY < clickThresholdPx) {
                         isPanelExpanded = !isPanelExpanded
                         expandedLayout.visibility = if (isPanelExpanded) View.VISIBLE else View.GONE
                     }
@@ -349,15 +357,14 @@ class GameOverlayService : Service() {
         serviceScope.launch {
             while (isActive) {
                 val ping = optimizer.measureRealPing()
-                // Tek bir Shizuku kabuk çağrısıyla hem gerçek FPS hem CPU sıcaklığı okunur
-                val (realFps, cpuTemp) = optimizer.readShizukuTelemetry(includeFps = true)
+                val (sfFps, cpuTemp) = optimizer.readShizukuTelemetry(includeFps = true, subtractHudFrame = true)
                 val metrics = optimizer.getHardwareMetrics(ping, preReadCpuTemp = cpuTemp)
                 val pingStr = if (ping > 0) "${ping}ms" else "--"
 
-                val perfLabel = if (realFps != null) {
-                    "⚡ $realFps FPS (${metrics.currentDisplayHz}Hz)"
+                val perfLabel = if (sfFps != null) {
+                    "⚡ SF:$sfFps FPS (${metrics.currentDisplayHz}Hz)"
                 } else {
-                    "⚡ Ekran: ${metrics.currentDisplayHz} Hz"
+                    "⚡ Ekran:${metrics.currentDisplayHz}Hz"
                 }
 
                 val tempLabel = if (metrics.cpuTemp != null) {
@@ -366,10 +373,22 @@ class GameOverlayService : Service() {
                     "Pil:${metrics.batteryTemp}°C"
                 }
 
-                statusTextView.text = "$perfLabel | $tempLabel | $pingStr"
-                val engineMode = if (metrics.shizukuActive) "Shizuku ADB Aktif ✅" else "Standart Mod"
-                telemetryDetailText.text = "$engineMode | RAM: %${metrics.ramPercent} (${metrics.usedRamMb}MB)"
-                delay(1500)
+                val guardWarning = if (metrics.thermalThrottledByGuard) " ⚠️TERMAL KORUMA" else ""
+                statusTextView.text = "$perfLabel | $tempLabel | $pingStr$guardWarning"
+                statusTextView.setTextColor(
+                    if (metrics.thermalThrottledByGuard) Color.parseColor("#F87171")
+                    else Color.parseColor("#00E676")
+                )
+
+                val engineMode = if (metrics.thermalThrottledByGuard) {
+                    "Termostat Koruması Aktif (Isı Sınırı Aşıldı)"
+                } else if (metrics.shizukuActive) {
+                    "Shizuku ADB Aktif ✅"
+                } else {
+                    "Standart Mod"
+                }
+                telemetryDetailText.text = "$engineMode | Boş RAM: ${metrics.availRamMb}MB (%${100 - metrics.ramPercent})"
+                delay(1600)
             }
         }
     }
@@ -385,9 +404,7 @@ class GameOverlayService : Service() {
         }
         hudRootView = null
 
-        // ANR yaratan runBlocking kaldırıldı!
-        // Singleton optimizer kendi IO CoroutineScope'u üzerinde tüm sistem ve oyun ayarlarını güvenle sıfırlar.
         optimizer.restoreOriginalSystemStateAsync()
-        Toast.makeText(applicationContext, "Oyun modu kapandı, tüm sistem ayarları normale döndürülüyor.", Toast.LENGTH_SHORT).show()
+        Toast.makeText(applicationContext, "Oyun modu kapandı, tüm sistem ayarları orijinale döndürüldü.", Toast.LENGTH_SHORT).show()
     }
 }
