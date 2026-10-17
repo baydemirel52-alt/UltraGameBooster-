@@ -235,8 +235,8 @@ fun GameBoosterDashboard(
         }
     }
 
+    // Servis HUD izni olmasa da çalışır (ısı koruması için); HUD'u servis kendisi açıp kapatır.
     fun startOrUpdateOverlayService() {
-        if (!Settings.canDrawOverlays(context)) return
         val serviceIntent = Intent(context, GameOverlayService::class.java).apply {
             action = GameOverlayService.ACTION_UPDATE_CONFIG
         }
@@ -337,6 +337,9 @@ fun GameBoosterDashboard(
                             )
                             context.startActivity(intent)
                         } else {
+                            // "HUD Aç" her zaman HUD'u gösterir: tercihi de açık yap.
+                            prefs.edit().putBoolean("show_hud", true).apply()
+                            showFloatingHud = true
                             startOrUpdateOverlayService()
                             Toast.makeText(context, "Oyun İçi HUD Başlatıldı!", Toast.LENGTH_SHORT).show()
                         }
@@ -382,7 +385,7 @@ fun GameBoosterDashboard(
                         scope.launch {
                             val updatedCount = optimizer.updateActiveGamesDownscale(ratio)
                             if (updatedCount > 0) {
-                                customStatusOverride = "$updatedCount aktif oyunun ölçeği ($ratio) güncellendi."
+                                customStatusOverride = "$updatedCount oyun için ölçek ($ratio) ayarlandı • Oyunu kapatıp yeniden açınca geçerli olur."
                             } else {
                                 customStatusOverride = "Oyun çözünürlük ölçeği ($ratio) seçildi."
                             }
@@ -394,12 +397,8 @@ fun GameBoosterDashboard(
                             val res = optimizer.executeDeepBoost(targetHz)
                             if (autoDnd) optimizer.setDoNotDisturb(true)
 
-                            if (showFloatingHud && Settings.canDrawOverlays(context)) {
-                                startOrUpdateOverlayService()
-                            } else {
-                                optimizer.setLowLatencyWifiLock(wifiLowLatency)
-                                optimizer.setCpuSustainedWakeLock(keepAwake)
-                            }
+                            // Servis kilitleri, Hz'i ve ısı korumasını (HUD açık olsun olmasın) yönetir.
+                            startOrUpdateOverlayService()
 
                             metrics = optimizer.getHardwareMetrics(res.afterPingMs)
                             val hzBadge = if (res.hzLockedVerified) "${targetHz}Hz Doğrulandı ✅" else "${targetHz}Hz (İzin Bekliyor)"
@@ -432,12 +431,8 @@ fun GameBoosterDashboard(
                             val shizukuVerified = optimizer.applyShizukuGameOptimization(app.packageName, downscaleRatio)
                             if (autoDnd) optimizer.setDoNotDisturb(true)
 
-                            if (showFloatingHud && Settings.canDrawOverlays(context)) {
-                                startOrUpdateOverlayService()
-                            } else {
-                                optimizer.setLowLatencyWifiLock(wifiLowLatency)
-                                optimizer.setCpuSustainedWakeLock(keepAwake)
-                            }
+                            // Servis kilitleri, Hz'i ve ısı korumasını (HUD açık olsun olmasın) yönetir.
+                            startOrUpdateOverlayService()
 
                             val modeMsg = if (shizukuVerified) {
                                 "Shizuku Doğrulandı (Ölçek: $downscaleRatio, ${targetHz}Hz)"
@@ -469,25 +464,33 @@ fun GameBoosterDashboard(
                     onAutoDndChange = {
                         autoDnd = it
                         prefs.edit().putBoolean("auto_dnd", it).apply()
-                        scope.launch { optimizer.setDoNotDisturb(it) }
+                        // Tercih yalnızca kaydedilir; oyun oturumu aktifse hemen uygulanır.
+                        if (optimizer.isBoostSessionActive()) {
+                            scope.launch { optimizer.setDoNotDisturb(it) }
+                        }
                     },
                     wifiLowLatency = wifiLowLatency,
                     onWifiLatencyChange = {
                         wifiLowLatency = it
                         prefs.edit().putBoolean("wifi_lock", it).apply()
-                        optimizer.setLowLatencyWifiLock(it)
+                        if (optimizer.isBoostSessionActive()) {
+                            optimizer.setLowLatencyWifiLock(it)
+                        }
                     },
                     showFloatingHud = showFloatingHud,
                     onShowHudChange = {
                         showFloatingHud = it
                         prefs.edit().putBoolean("show_hud", it).apply()
+                        if (optimizer.isBoostSessionActive()) {
+                            startOrUpdateOverlayService()
+                        }
                     },
                     keepAwake = keepAwake,
                     onKeepAwakeChange = {
                         keepAwake = it
                         prefs.edit().putBoolean("keep_awake", it).apply()
-                        optimizer.setCpuSustainedWakeLock(it)
-                        if (Settings.canDrawOverlays(context)) {
+                        if (optimizer.isBoostSessionActive()) {
+                            optimizer.setCpuSustainedWakeLock(it)
                             startOrUpdateOverlayService()
                         }
                     }
@@ -932,7 +935,7 @@ fun EngineSettingsTab(
         item {
             SettingToggleRow(
                 title = "Oyun İçi HUD Paneli",
-                subtitle = "Oyun üstünde SF Çizim FPS/Hz, 43°C Termostat durumu ve ekran uyanıklık kilidi sağlar.",
+                subtitle = "Oyun üstünde ekran kare hızı, Hz, ısı ve ping gösterir. Kapalıyken de 43°C ısı koruması arka planda çalışır.",
                 checked = showFloatingHud,
                 onCheckedChange = onShowHudChange
             )
