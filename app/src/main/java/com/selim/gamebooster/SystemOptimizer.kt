@@ -298,6 +298,12 @@ class SystemOptimizer private constructor(context: Context) {
     }
 
     suspend fun checkAndApplyThermalGuard(batteryTemp: Float, cpuTemp: Float?): Boolean = withContext(Dispatchers.IO) {
+        // Oyun/boost oturumu yokken sistem ayarlarına dokunma (yedek alınmamış olabilir).
+        if (!isBoostSessionActive()) {
+            isThermalGuardTriggered = false
+            return@withContext false
+        }
+
         val isOverheating = batteryTemp >= SAFE_BATTERY_TEMP_LIMIT ||
                 (cpuTemp != null && cpuTemp >= SAFE_CPU_TEMP_LIMIT)
 
@@ -550,17 +556,34 @@ class SystemOptimizer private constructor(context: Context) {
 
             val thermalCmd = if (!isThermalGuardTriggered) {
                 "cmd power set-fixed-performance-mode-enabled true; " +
-                        "settings put secure game_auto_temperature_control 0; "
+                        "settings put secure game_auto_temperature_control 0"
             } else {
                 ""
             }
 
-            val fullCmd = "$gameCmd; $thermalCmd echo '__VERIFY_OK__'"
-            val out = runShizukuShell(fullCmd, 2500L).orEmpty()
+            // 2>&1 ile hata mesajları da (stderr) çıktıya katılır; komutların sonunda ayarın
+            // gerçekten yazılıp yazılmadığı device_config get ile GERİ OKUNUR.
+            val verifyCmd = "( $gameCmd; echo '__CMD_END__'; device_config get game_overlay $packageName ) 2>&1"
+            val out = runShizukuShell(verifyCmd, 3000L)
 
-            out.contains("__VERIFY_OK__") &&
-                    !out.contains("Error:", ignoreCase = true) &&
-                    !out.contains("Exception", ignoreCase = true)
+            // Isı/performans modu komutları doğrulamayı kirletmesin diye ayrı çalışır.
+            if (thermalCmd.isNotEmpty()) {
+                runShizukuShell(thermalCmd, 1500L)
+            }
+
+            if (out.isNullOrBlank()) return@withContext false
+
+            val cmdPart = out.substringBefore("__CMD_END__")
+            val configPart = out.substringAfter("__CMD_END__", "").trim()
+
+            val errorWords = listOf("error", "exception", "usage:", "unknown", "not found", "denied", "invalid")
+            if (errorWords.any { cmdPart.contains(it, ignoreCase = true) }) return@withContext false
+
+            if (safeRatio == "disable") {
+                configPart.isEmpty() || configPart == "null"
+            } else {
+                configPart.contains("downscaleFactor=$safeRatio")
+            }
         } catch (_: Throwable) {
             false
         }

@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -25,6 +26,7 @@ import android.widget.TextView
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -41,6 +43,10 @@ class GameOverlayService : Service() {
 
     private var hudRootView: View? = null
     private var hudLayoutParams: WindowManager.LayoutParams? = null
+    private var hudStatusText: TextView? = null
+    private var hudDetailText: TextView? = null
+    private var telemetryJob: Job? = null
+    private var guardActive = false
     private var isPanelExpanded = false
     private var targetHz = 120
     private var supportedRates = listOf(60, 120)
@@ -71,12 +77,10 @@ class GameOverlayService : Service() {
         startForegroundNotification()
         applyUserPreferencesAndLocks()
 
-        if (Settings.canDrawOverlays(this)) {
-            createSafeFloatingHud()
-        } else {
-            Toast.makeText(this, "Üstte gösterim izni bulunamadı, servis kapatılıyor.", Toast.LENGTH_SHORT).show()
-            stopSelf()
-        }
+        // HUD isteğe bağlı: izin yoksa veya kapalıysa servis YİNE de çalışır,
+        // böylece ısı koruması her zaman devrede kalır.
+        refreshHudVisibility()
+        startTelemetryLoop()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -87,6 +91,7 @@ class GameOverlayService : Service() {
             }
             ACTION_UPDATE_CONFIG -> {
                 applyUserPreferencesAndLocks()
+                refreshHudVisibility()
                 updateOverlayFlagsFromPrefs()
             }
         }
@@ -112,6 +117,32 @@ class GameOverlayService : Service() {
             optimizer.lockSystemRefreshRate(targetHz)
             updateForegroundNotificationText()
         }
+    }
+
+    /**
+     * HUD'u tercihe ve izne göre açar/kapatır.
+     * Servis HUD olmadan da çalışmaya devam eder (ısı koruması için).
+     */
+    private fun refreshHudVisibility() {
+        val prefs = getSharedPreferences(SystemOptimizer.PREFS_NAME, Context.MODE_PRIVATE)
+        val wantHud = prefs.getBoolean("show_hud", true) && Settings.canDrawOverlays(this)
+        if (wantHud && hudRootView == null) {
+            createSafeFloatingHud()
+        } else if (!wantHud && hudRootView != null) {
+            removeHud()
+        }
+    }
+
+    private fun removeHud() {
+        hudRootView?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (_: Exception) {}
+        }
+        hudRootView = null
+        hudLayoutParams = null
+        hudStatusText = null
+        hudDetailText = null
     }
 
     private fun updateOverlayFlagsFromPrefs() {
@@ -146,10 +177,16 @@ class GameOverlayService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
+        val contentText = if (guardActive) {
+            "⚠️ Isı koruması devrede • Performans modu kapatıldı."
+        } else {
+            "Oyun modu çalışıyor • Kapatıldığında tüm ayarlar orijinale döner."
+        }
+
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, CHANNEL_ID)
                 .setContentTitle("Ultra Game Engine Aktif (${targetHz}Hz)")
-                .setContentText("HUD çalışıyor • Kapatıldığında tüm ayarlar orijinale döner.")
+                .setContentText(contentText)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .addAction(
                     Notification.Action.Builder(
@@ -164,7 +201,7 @@ class GameOverlayService : Service() {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
                 .setContentTitle("Ultra Game Engine Aktif (${targetHz}Hz)")
-                .setContentText("HUD çalışıyor • Kapatıldığında tüm ayarlar orijinale döner.")
+                .setContentText(contentText)
                 .setSmallIcon(android.R.drawable.ic_media_play)
                 .setOngoing(true)
                 .build()
@@ -181,7 +218,18 @@ class GameOverlayService : Service() {
             )
             nm.createNotificationChannel(channel)
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+
+        val notification = buildNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Android 14+ : servis türünü kodda da bildirmek zorunlu (manifestte specialUse yazıyor)
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
+        } else {
+            startForeground(NOTIFICATION_ID, notification)
+        }
     }
 
     private fun updateForegroundNotificationText() {
@@ -189,6 +237,74 @@ class GameOverlayService : Service() {
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.notify(NOTIFICATION_ID, buildNotification())
         } catch (_: Exception) {}
+    }
+
+    /**
+     * Tek telemetri döngüsü: HUD varsa yazıları günceller, yoksa sadece ısıyı izler.
+     * Isı koruması (getHardwareMetrics içinde) bu döngü sayesinde HUD kapalıyken de çalışır.
+     */
+    private fun startTelemetryLoop() {
+        telemetryJob?.cancel()
+        telemetryJob = serviceScope.launch {
+            while (isActive) {
+                val statusView = hudStatusText
+                val detailView = hudDetailText
+                val hudVisible = statusView != null && detailView != null
+
+                val ping = if (hudVisible) optimizer.measureRealPing() else -1
+                val (sfFps, cpuTemp) = optimizer.readShizukuTelemetry(
+                    includeFps = hudVisible,
+                    subtractHudFrame = true
+                )
+                val metrics = optimizer.getHardwareMetrics(ping, preReadCpuTemp = cpuTemp)
+
+                if (metrics.thermalThrottledByGuard != guardActive) {
+                    guardActive = metrics.thermalThrottledByGuard
+                    updateForegroundNotificationText()
+                    if (guardActive) {
+                        Toast.makeText(
+                            this@GameOverlayService,
+                            "⚠️ Isı sınırı aşıldı: performans modu kapatıldı.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                    }
+                }
+
+                if (statusView != null && detailView != null) {
+                    val pingStr = if (ping > 0) "${ping}ms" else "--"
+
+                    val perfLabel = if (sfFps != null) {
+                        "⚡ SF:$sfFps FPS (${metrics.currentDisplayHz}Hz)"
+                    } else {
+                        "⚡ Ekran:${metrics.currentDisplayHz}Hz"
+                    }
+
+                    val tempLabel = if (metrics.cpuTemp != null) {
+                        "CPU:${metrics.cpuTemp}°C"
+                    } else {
+                        "Pil:${metrics.batteryTemp}°C"
+                    }
+
+                    val guardWarning = if (metrics.thermalThrottledByGuard) " ⚠️TERMAL KORUMA" else ""
+                    statusView.text = "$perfLabel | $tempLabel | $pingStr$guardWarning"
+                    statusView.setTextColor(
+                        if (metrics.thermalThrottledByGuard) Color.parseColor("#F87171")
+                        else Color.parseColor("#00E676")
+                    )
+
+                    val engineMode = if (metrics.thermalThrottledByGuard) {
+                        "Termostat Koruması Aktif (Isı Sınırı Aşıldı)"
+                    } else if (metrics.shizukuActive) {
+                        "Shizuku ADB Aktif ✅"
+                    } else {
+                        "Standart Mod"
+                    }
+                    detailView.text = "$engineMode | Boş RAM: ${metrics.availRamMb}MB (%${100 - metrics.ramPercent})"
+                }
+
+                delay(if (hudVisible) 1600L else 3000L)
+            }
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility", "SetTextI18n")
@@ -214,7 +330,6 @@ class GameOverlayService : Service() {
             x = dpToPx(12f)
             y = dpToPx(56f)
         }
-        hudLayoutParams = params
 
         val rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -235,7 +350,7 @@ class GameOverlayService : Service() {
 
         val expandedLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            visibility = View.GONE
+            visibility = if (isPanelExpanded) View.VISIBLE else View.GONE
             setPadding(0, dpToPx(8f), 0, 0)
         }
 
@@ -281,7 +396,7 @@ class GameOverlayService : Service() {
                 val verified = optimizer.lockSystemRefreshRate(targetHz)
                 updateForegroundNotificationText()
                 val msg = if (verified) {
-                    "${targetHz}Hz Global Kilit Doğrulandı ✅"
+                    "${targetHz}Hz ayarı yazıldı ve doğrulandı ✅"
                 } else {
                     "${targetHz}Hz doğrulanamadı (Shizuku veya Ayar İzni kontrol et)"
                 }
@@ -289,7 +404,8 @@ class GameOverlayService : Service() {
             }
         }
 
-        val boostBtn = createMiniButton("🚀 Önbellek Temizle", "#2563EB") {
+        // Yaptığı iş önbellek temizlemek değil, arka plan uygulamalarını kapatmak.
+        val boostBtn = createMiniButton("🚀 Arka Planı Kapat", "#2563EB") {
             serviceScope.launch {
                 val res = optimizer.executeDeepBoost(targetHz)
                 val detail = "Boş RAM: ${res.beforeAvailRamMb}→${res.afterAvailRamMb} MB (+${res.freedRamMb} MB)"
@@ -345,58 +461,26 @@ class GameOverlayService : Service() {
             }
         }
 
-        hudRootView = rootLayout
-        windowManager.addView(rootLayout, params)
-
-        serviceScope.launch {
-            while (isActive) {
-                val ping = optimizer.measureRealPing()
-                val (sfFps, cpuTemp) = optimizer.readShizukuTelemetry(includeFps = true, subtractHudFrame = true)
-                val metrics = optimizer.getHardwareMetrics(ping, preReadCpuTemp = cpuTemp)
-                val pingStr = if (ping > 0) "${ping}ms" else "--"
-
-                val perfLabel = if (sfFps != null) {
-                    "⚡ SF:$sfFps FPS (${metrics.currentDisplayHz}Hz)"
-                } else {
-                    "⚡ Ekran:${metrics.currentDisplayHz}Hz"
-                }
-
-                val tempLabel = if (metrics.cpuTemp != null) {
-                    "CPU:${metrics.cpuTemp}°C"
-                } else {
-                    "Pil:${metrics.batteryTemp}°C"
-                }
-
-                val guardWarning = if (metrics.thermalThrottledByGuard) " ⚠️TERMAL KORUMA" else ""
-                statusTextView.text = "$perfLabel | $tempLabel | $pingStr$guardWarning"
-                statusTextView.setTextColor(
-                    if (metrics.thermalThrottledByGuard) Color.parseColor("#F87171")
-                    else Color.parseColor("#00E676")
-                )
-
-                val engineMode = if (metrics.thermalThrottledByGuard) {
-                    "Termostat Koruması Aktif (Isı Sınırı Aşıldı)"
-                } else if (metrics.shizukuActive) {
-                    "Shizuku ADB Aktif ✅"
-                } else {
-                    "Standart Mod"
-                }
-                telemetryDetailText.text = "$engineMode | Boş RAM: ${metrics.availRamMb}MB (%${100 - metrics.ramPercent})"
-                delay(1600)
-            }
+        try {
+            windowManager.addView(rootLayout, params)
+            hudLayoutParams = params
+            hudRootView = rootLayout
+            hudStatusText = statusTextView
+            hudDetailText = telemetryDetailText
+        } catch (_: Exception) {
+            // İzin sonradan geri alındıysa HUD açılamaz; servis (ısı koruması) yine de çalışır.
+            hudRootView = null
+            hudLayoutParams = null
+            hudStatusText = null
+            hudDetailText = null
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        telemetryJob?.cancel()
         serviceScope.cancel()
-
-        hudRootView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Exception) {}
-        }
-        hudRootView = null
+        removeHud()
 
         optimizer.restoreOriginalSystemStateAsync()
         Toast.makeText(applicationContext, "Oyun modu kapandı, tüm sistem ayarları orijinale döndürüldü.", Toast.LENGTH_SHORT).show()
