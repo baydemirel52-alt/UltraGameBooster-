@@ -1,8 +1,7 @@
-package com.selim.gamebooster
+package com.selim.ultragameengine
 
 import android.Manifest
 import android.app.NotificationManager
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -11,10 +10,7 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -22,1043 +18,450 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.LifecycleOwner
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import androidx.compose.ui.viewinterop.AndroidView
+import com.google.android.gms.ads.AdRequest
+import com.google.android.gms.ads.AdSize
+import com.google.android.gms.ads.AdView
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var optimizer: SystemOptimizer
-    private var shizukuGrantedState = mutableStateOf(false)
-
-    private val shizukuPermissionListener = Shizuku.OnRequestPermissionResultListener { _, grantResult ->
-        shizukuGrantedState.value = (grantResult == PackageManager.PERMISSION_GRANTED)
-        if (shizukuGrantedState.value) {
-            Toast.makeText(this, "Shizuku ADB Yetkisi Bağlandı! Doğrulamalı Motor Aktif.", Toast.LENGTH_LONG).show()
-        }
-    }
+    private lateinit var monetizationManager: MonetizationManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        optimizer = SystemOptimizer.getInstance(this)
-        shizukuGrantedState.value = optimizer.hasShizukuPermission()
+        EngineManager.backupOriginalDisplay(this)
+        EngineManager.installCrashSafetyRestore(this)
+        monetizationManager = MonetizationManager(this)
 
-        try {
-            Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
-        } catch (_: Throwable) {}
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 100)
+            }
+        }
 
         setContent {
             MaterialTheme(
                 colorScheme = darkColorScheme(
-                    primary = Color(0xFF00E676),
-                    secondary = Color(0xFF3B82F6),
-                    background = Color(0xFF090D16),
-                    surface = Color(0xFF131B2E)
+                    primary = Color(0xFF00E5FF),
+                    secondary = Color(0xFF7C4DFF),
+                    background = Color(0xFF080B12),
+                    surface = Color(0xFF121824)
                 )
             ) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    GameBoosterDashboard(
-                        optimizer = optimizer,
-                        shizukuGranted = shizukuGrantedState.value,
-                        onRefreshShizuku = {
-                            shizukuGrantedState.value = optimizer.hasShizukuPermission()
-                        }
-                    )
-                }
+                UltraEngineMainScreen()
             }
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        try {
-            Shizuku.removeRequestPermissionResultListener(shizukuPermissionListener)
-        } catch (_: Throwable) {}
-    }
-}
+    @Composable
+    fun UltraEngineMainScreen() {
+        val scope = rememberCoroutineScope()
+        val isProUnlocked by monetizationManager.isProUnlocked.collectAsState()
+        var shizukuReady by remember { mutableStateOf(EngineManager.isShizukuReady()) }
+        var installedGames by remember { mutableStateOf(emptyList<GameAppInfo>()) }
+        var selectedGame by remember { mutableStateOf<GameAppInfo?>(null) }
 
-@Composable
-fun CyberBoosterLogo(modifier: Modifier = Modifier, size: Dp = 40.dp) {
-    Canvas(modifier = modifier.size(size)) {
-        val w = this.size.width
-        val h = this.size.height
+        // Profil Ayarları
+        var resolutionScale by remember { mutableFloatStateOf(1.0f) }
+        var targetHz by remember { mutableIntStateOf(120) }
+        var enableDnd by remember { mutableStateOf(true) }
+        var lowLatencyWifi by remember { mutableStateOf(true) }
+        var statusLog by remember { mutableStateOf("Motor hazır. Oyununuzu seçip optimizasyonu başlatın.") }
+        var showShizukuWizard by remember { mutableStateOf(false) }
 
-        val shieldPath = Path().apply {
-            moveTo(w * 0.5f, h * 0.06f)
-            lineTo(w * 0.90f, h * 0.25f)
-            lineTo(w * 0.82f, h * 0.72f)
-            lineTo(w * 0.5f, h * 0.95f)
-            lineTo(w * 0.18f, h * 0.72f)
-            lineTo(w * 0.10f, h * 0.25f)
-            close()
-        }
-
-        drawPath(
-            path = shieldPath,
-            brush = Brush.linearGradient(
-                colors = listOf(Color(0xFF0F2942), Color(0xFF090D16)),
-                start = Offset(0f, 0f),
-                end = Offset(w, h)
-            )
-        )
-
-        drawPath(
-            path = shieldPath,
-            brush = Brush.linearGradient(
-                colors = listOf(Color(0xFF00E676), Color(0xFF38BDF8)),
-                start = Offset(0f, 0f),
-                end = Offset(w, h)
-            ),
-            style = Stroke(width = w * 0.06f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        )
-
-        val boltPath = Path().apply {
-            moveTo(w * 0.56f, h * 0.20f)
-            lineTo(w * 0.32f, h * 0.52f)
-            lineTo(w * 0.50f, h * 0.52f)
-            lineTo(w * 0.42f, h * 0.80f)
-            lineTo(w * 0.68f, h * 0.46f)
-            lineTo(w * 0.50f, h * 0.46f)
-            close()
-        }
-
-        drawPath(
-            path = boltPath,
-            brush = Brush.verticalGradient(
-                colors = listOf(Color(0xFF00E676), Color(0xFF10B981))
-            )
-        )
-    }
-}
-
-@Composable
-fun GameBoosterDashboard(
-    optimizer: SystemOptimizer,
-    shizukuGranted: Boolean,
-    onRefreshShizuku: () -> Unit
-) {
-    val context = LocalContext.current
-    val lifecycleOwner = context as? LifecycleOwner
-    val scope = rememberCoroutineScope()
-    val prefs = remember { context.getSharedPreferences(SystemOptimizer.PREFS_NAME, Context.MODE_PRIVATE) }
-    val nm = remember { context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager }
-
-    val supportedHzList = remember { optimizer.getSupportedRefreshRates() }
-    var selectedTab by remember { mutableIntStateOf(0) }
-    var targetHz by remember {
-        val saved = prefs.getInt("target_hz", supportedHzList.lastOrNull() ?: 120)
-        mutableIntStateOf(if (saved in supportedHzList) saved else (supportedHzList.lastOrNull() ?: 120))
-    }
-    var downscaleRatio by remember { mutableStateOf(prefs.getString("downscale", "0.8") ?: "0.8") }
-    var selectedPingServer by remember { mutableStateOf(optimizer.getSelectedPingServer()) }
-
-    var autoDnd by remember { mutableStateOf(prefs.getBoolean("auto_dnd", true)) }
-    var wifiLowLatency by remember { mutableStateOf(prefs.getBoolean("wifi_lock", true)) }
-    var showFloatingHud by remember { mutableStateOf(prefs.getBoolean("show_hud", true)) }
-    var keepAwake by remember { mutableStateOf(prefs.getBoolean("keep_awake", true)) }
-
-    var canWriteSettings by remember { mutableStateOf(Settings.System.canWrite(context)) }
-    var canDrawOverlays by remember { mutableStateOf(Settings.canDrawOverlays(context)) }
-    var canUseDnd by remember { mutableStateOf(nm.isNotificationPolicyAccessGranted) }
-
-    // Uygulama arka plana geçtiğinde Kokpit döngüsünü tamamen durdurmak için yaşam döngüsü durumu
-    var isAppResumed by remember { mutableStateOf(true) }
-
-    var metrics by remember {
-        mutableStateOf(HardwareMetrics(0, 4096, 8192, 0, 35.0f, null, 80, -1, 120, shizukuGranted, false))
-    }
-    var installedApps by remember { mutableStateOf<List<GameAppInfo>>(emptyList()) }
-    var customStatusOverride by remember { mutableStateOf<String?>(null) }
-
-    val statusSubtitle = customStatusOverride ?: if (metrics.thermalThrottledByGuard) {
-        "⚠️ Termostat Koruması Aktif (Isı Sınırı Aşıldı)"
-    } else if (shizukuGranted) {
-        "Shizuku ADB Motoru Aktif ✅"
-    } else {
-        "Standart Mod • Shizuku Bekleniyor"
-    }
-
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> {
-                    isAppResumed = true
-                    onRefreshShizuku()
-                    canWriteSettings = Settings.System.canWrite(context)
-                    canDrawOverlays = Settings.canDrawOverlays(context)
-                    canUseDnd = nm.isNotificationPolicyAccessGranted
-                }
-                Lifecycle.Event.ON_PAUSE, Lifecycle.Event.ON_STOP -> {
-                    isAppResumed = false
-                }
-                else -> {}
+        LaunchedEffect(Unit) {
+            installedGames = EngineManager.getInstalledGames(this@MainActivity)
+            if (installedGames.isNotEmpty()) {
+                selectedGame = installedGames.first()
+                val prof = EngineManager.loadProfile(this@MainActivity, installedGames.first().packageName)
+                resolutionScale = prof.resolutionScale
+                targetHz = prof.targetHz
+                enableDnd = prof.enableDnd
+                lowLatencyWifi = prof.lowLatencyWifi
             }
         }
-        lifecycleOwner?.lifecycle?.addObserver(observer)
-        onDispose {
-            lifecycleOwner?.lifecycle?.removeObserver(observer)
-        }
-    }
 
-    val notifPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            Toast.makeText(context, "Bildirim izni verildi!", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    // Servis HUD izni olmasa da çalışır (ısı koruması için); HUD'u servis kendisi açıp kapatır.
-    fun startOrUpdateOverlayService() {
-        val serviceIntent = Intent(context, GameOverlayService::class.java).apply {
-            action = GameOverlayService.ACTION_UPDATE_CONFIG
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(serviceIntent)
-        } else {
-            context.startService(serviceIntent)
-        }
-    }
-
-    LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = ContextCompat.checkSelfPermission(
-                context, Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                notifPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-        }
-        installedApps = optimizer.getInstalledUserApps()
-    }
-
-    // Yalnızca uygulama ekranda açıkken (ON_RESUME) çalışır; oyuna geçince arka planda pil tüketmez!
-    LaunchedEffect(isAppResumed, selectedPingServer) {
-        if (!isAppResumed) return@LaunchedEffect
-        while (isActive && isAppResumed) {
-            onRefreshShizuku()
-            val ping = optimizer.measureRealPing()
-            metrics = optimizer.getHardwareMetrics(ping)
-            delay(2200)
-        }
-    }
-
-    Scaffold(
-        containerColor = Color(0xFF090D16),
-        bottomBar = {
-            NavigationBar(containerColor = Color(0xFF111827)) {
-                NavigationBarItem(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    icon = { Icon(Icons.Default.Speed, contentDescription = null) },
-                    label = { Text("Kokpit") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    icon = { Icon(Icons.Default.SportsEsports, contentDescription = null) },
-                    label = { Text("Oyunlar") }
-                )
-                NavigationBarItem(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    icon = { Icon(Icons.Default.Tune, contentDescription = null) },
-                    label = { Text("Shizuku & İzin") }
-                )
-            }
-        }
-    ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .background(Color(0xFF080B12))
+                .padding(16.dp)
         ) {
+            // ÜST BAŞLIK & ACİL EKRAN SIFIRLAMA BUTONU
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.weight(1f),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CyberBoosterLogo(size = 42.dp)
-                    Spacer(Modifier.width(10.dp))
-                    Column {
-                        Text(
-                            text = "ULTRA GAME ENGINE v4",
-                            color = Color(0xFF00E676),
-                            fontSize = 18.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                        Text(
-                            text = statusSubtitle,
-                            color = if (metrics.thermalThrottledByGuard) Color(0xFFF87171) else Color(0xFF94A3B8),
-                            fontSize = 11.sp
-                        )
-                    }
+                Column {
+                    Text(
+                        text = "ULTRA GAME ENGINE",
+                        color = Color(0xFF00E5FF),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = if (shizukuReady) "MOD: ULTRA DONANIM (SHIZUKU AKTİF)" else "MOD: STANDART OPTİMİZASYON",
+                        color = if (shizukuReady) Color(0xFF00E676) else Color(0xFFFFB300),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
 
                 Button(
                     onClick = {
-                        if (!Settings.canDrawOverlays(context)) {
-                            Toast.makeText(context, "Önce Üstte Gösterim iznini ver kanka!", Toast.LENGTH_LONG).show()
-                            val intent = Intent(
-                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                                Uri.parse("package:${context.packageName}")
-                            )
-                            context.startActivity(intent)
-                        } else {
-                            // "HUD Aç" her zaman HUD'u gösterir: tercihi de açık yap.
-                            prefs.edit().putBoolean("show_hud", true).apply()
-                            showFloatingHud = true
-                            startOrUpdateOverlayService()
-                            Toast.makeText(context, "Oyun İçi HUD Başlatıldı!", Toast.LENGTH_SHORT).show()
-                        }
+                        val msg = EngineManager.restoreOriginalSystemSettings(this@MainActivity)
+                        stopService(Intent(this@MainActivity, GameOverlayService::class.java))
+                        statusLog = msg
+                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                    shape = RoundedCornerShape(12.dp)
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F)),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                 ) {
-                    Icon(Icons.Default.Visibility, contentDescription = null, tint = Color(0xFF00E676))
-                    Spacer(Modifier.width(6.dp))
-                    Text("HUD Aç", color = Color.White, fontSize = 12.sp)
+                    Text("ACİL SIFIRLA", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Bold)
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            when (selectedTab) {
-                0 -> CockpitTab(
-                    metrics = metrics,
-                    supportedHzList = supportedHzList,
-                    targetHz = targetHz,
-                    downscaleRatio = downscaleRatio,
-                    pingServer = selectedPingServer,
-                    onSelectHz = { hz ->
-                        targetHz = hz
-                        prefs.edit().putInt("target_hz", hz).apply()
-                        // Eğer zaten aktif bir oyun/boost oturumu varsa anında güncelle, yoksa sadece hedef olarak kaydet
-                        if (optimizer.isBoostSessionActive()) {
-                            scope.launch {
-                                val verified = optimizer.lockSystemRefreshRate(hz)
-                                customStatusOverride = if (verified) {
-                                    "Global Ekran ${hz}Hz Kilidi Doğrulandı ✅"
-                                } else {
-                                    "${hz}Hz yazılamadı (Shizuku veya Sistem Ayar İzni gerekli)"
+            // SHIZUKU KURULUM SİHİRBAZI KARTI (Normal Kullanıcılar İçin Rehber)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF121824)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(12.dp))
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = if (shizukuReady) "✅ Shizuku Donanım Yetkisi Bağlı" else "⚡ Donanım Kilidini Aç (Shizuku Rehberi)",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                        TextButton(onClick = {
+                            shizukuReady = EngineManager.isShizukuReady()
+                            showShizukuWizard = !showShizukuWizard
+                        }) {
+                            Text(if (showShizukuWizard) "Gizle" else "Kurulumu Gör", color = Color(0xFF00E5FF))
+                        }
+                    }
+
+                    if (showShizukuWizard) {
+                        Text(
+                            text = "Çözünürlük ölçekleme ve gerçek FPS ölçümü için Rotsuz ADB yetkisi gerekir:\n" +
+                                    "1. Shizuku uygulamasını indirip açın.\n" +
+                                    "2. Geliştirici Seçenekleri -> Kablosuz Hata Ayıklama ile Shizuku'yu başlatın.\n" +
+                                    "3. 'Yetki İste' butonuna basıp Ultra Motoru ateşleyin.",
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = {
+                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=moe.shizuku.privileged.api")))
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("1. Shizuku İndir", fontSize = 11.sp)
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    try {
+                                        startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                                    } catch (_: Exception) {
+                                        startActivity(Intent(Settings.ACTION_SETTINGS))
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("2. Geliştirici Ayarı", fontSize = 11.sp)
+                            }
+                            Button(
+                                onClick = {
+                                    try {
+                                        if (Shizuku.pingBinder()) {
+                                            Shizuku.requestPermission(1001)
+                                        } else {
+                                            Toast.makeText(this@MainActivity, "Önce Shizuku uygulamasını başlatın.", Toast.LENGTH_SHORT).show()
+                                        }
+                                    } catch (_: Exception) {}
+                                    shizukuReady = EngineManager.isShizukuReady()
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Text("3. Yetki Bağla", fontSize = 11.sp)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // PRO / ÖDÜLLÜ REKLAM DURUM BARI (Para Kazanma Modülü)
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1A142E)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, Color(0xFF7C4DFF), RoundedCornerShape(12.dp))
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = if (isProUnlocked) "🔥 ULTRA PRO AKTİF (${monetizationManager.getRemainingRewardMinutes()} dk)" else "🔒 ULTRA DONANIM AYARLARI KİLİTLİ",
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = "Reklam izleyerek 3 saat ücretsiz açın veya Ömür Boyu Pro'ya geçin.",
+                            color = Color(0xFFCBD5E1),
+                            fontSize = 11.sp
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Button(
+                            onClick = {
+                                monetizationManager.showRewardedAdFor3Hours(this@MainActivity) {}
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text("Reklam İzle (3s)", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                        Button(
+                            onClick = {
+                                monetizationManager.launchProPurchaseFlow(this@MainActivity)
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF7C4DFF)),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        ) {
+                            Text("PRO Al", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // ORTA ALAN: OYUN SEÇİCİ VE PERFORMANS KONTROLLERİ
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                item {
+                    Text("1. Optimize Edilecek Oyunu Seçin:", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                }
+
+                items(installedGames.take(6)) { game ->
+                    val isSelected = selectedGame?.packageName == game.packageName
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (isSelected) Color(0xFF1E293B) else Color(0xFF121824),
+                                RoundedCornerShape(8.dp)
+                            )
+                            .border(
+                                1.dp,
+                                if (isSelected) Color(0xFF00E5FF) else Color.Transparent,
+                                RoundedCornerShape(8.dp)
+                            )
+                            .clickable {
+                                selectedGame = game
+                                val prof = EngineManager.loadProfile(this@MainActivity, game.packageName)
+                                resolutionScale = prof.resolutionScale
+                                targetHz = prof.targetHz
+                                enableDnd = prof.enableDnd
+                                lowLatencyWifi = prof.lowLatencyWifi
+                            }
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(game.name, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(game.packageName, color = Color(0xFF64748B), fontSize = 11.sp)
+                        }
+                        if (isSelected) {
+                            Text("SEÇİLİ", color = Color(0xFF00E5FF), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF121824)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("2. Standart Optimizasyonlar (Shizuku Gerekmez)", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Oyun İçi Rahatsız Etmeyin (Bildirim Kapat)", color = Color.White, fontSize = 12.sp)
+                                Switch(checked = enableDnd, onCheckedChange = {
+                                    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+                                    if (!nm.isNotificationPolicyAccessGranted) {
+                                        startActivity(Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS))
+                                    }
+                                    enableDnd = it
+                                })
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text("Düşük Gecikmeli Wi-Fi Donanım Kilidi", color = Color.White, fontSize = 12.sp)
+                                Switch(checked = lowLatencyWifi, onCheckedChange = { lowLatencyWifi = it })
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF121824)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("3. Ultra Donanım Motoru (Android Game API & Shizuku)", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Text(
+                                text = "Çözünürlük Ölçekleme: %${(resolutionScale * 100).toInt()} (GPU Yükünü Düşürür)",
+                                color = Color.White,
+                                fontSize = 12.sp
+                            )
+                            Slider(
+                                value = resolutionScale,
+                                onValueChange = { resolutionScale = it },
+                                valueRange = 0.70f..1.0f,
+                                steps = 5
+                            )
+
+                            Text("Hedef Ekran Yenileme Hızı (Hz Sabitleme):", color = Color.White, fontSize = 12.sp)
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                listOf(60, 90, 120).forEach { hz ->
+                                    FilterChip(
+                                        selected = targetHz == hz,
+                                        onClick = { targetHz = hz },
+                                        label = { Text("$hz Hz") }
+                                    )
                                 }
                             }
-                        } else {
-                            customStatusOverride = "Hedef ${hz}Hz seçildi (Sistemi Hazırla veya Oyun Başlat ile devreye girer)."
-                        }
-                    },
-                    onSelectDownscale = { ratio ->
-                        downscaleRatio = ratio
-                        prefs.edit().putString("downscale", ratio).apply()
-                        scope.launch {
-                            val updatedCount = optimizer.updateActiveGamesDownscale(ratio)
-                            if (updatedCount > 0) {
-                                customStatusOverride = "$updatedCount oyun için ölçek ($ratio) ayarlandı • Oyunu kapatıp yeniden açınca geçerli olur."
-                            } else {
-                                customStatusOverride = "Oyun çözünürlük ölçeği ($ratio) seçildi."
-                            }
-                        }
-                    },
-                    onTurboBoost = {
-                        scope.launch {
-                            customStatusOverride = "Sistem hazırlanıyor & doğrulanıyor..."
-                            val res = optimizer.executeDeepBoost(targetHz)
-                            if (autoDnd) optimizer.setDoNotDisturb(true)
-
-                            // Servis kilitleri, Hz'i ve ısı korumasını (HUD açık olsun olmasın) yönetir.
-                            startOrUpdateOverlayService()
-
-                            metrics = optimizer.getHardwareMetrics(res.afterPingMs)
-                            val hzBadge = if (res.hzLockedVerified) "${targetHz}Hz Doğrulandı ✅" else "${targetHz}Hz (İzin Bekliyor)"
-                            val pingDiff = if (res.beforePingMs > 0 && res.afterPingMs > 0) {
-                                "Ping: ${res.beforePingMs}→${res.afterPingMs}ms"
-                            } else {
-                                "Ping: ${res.afterPingMs}ms"
-                            }
-                            customStatusOverride = "$hzBadge • Boş RAM: ${res.beforeAvailRamMb}→${res.afterAvailRamMb}MB (+${res.freedRamMb}MB) • $pingDiff"
-                        }
-                    },
-                    onRestoreNormal = {
-                        scope.launch {
-                            context.stopService(Intent(context, GameOverlayService::class.java))
-                            optimizer.restoreOriginalSystemState()
-                            val ping = optimizer.measureRealPing()
-                            metrics = optimizer.getHardwareMetrics(ping)
-                            customStatusOverride = "Tüm sistem ve oyun ayarları (Hz, Downscale, DND, Güç) orijinale döndürüldü."
-                            Toast.makeText(context, "Sistem orijinal ayarlarına döndü!", Toast.LENGTH_SHORT).show()
                         }
                     }
-                )
-                1 -> GamesLibraryTab(
-                    apps = installedApps,
-                    targetHz = targetHz,
-                    downscaleRatio = downscaleRatio,
-                    onLaunchGame = { app ->
-                        scope.launch {
-                            val res = optimizer.executeDeepBoost(targetHz)
-                            val shizukuVerified = optimizer.applyShizukuGameOptimization(app.packageName, downscaleRatio)
-                            if (autoDnd) optimizer.setDoNotDisturb(true)
+                }
 
-                            // Servis kilitleri, Hz'i ve ısı korumasını (HUD açık olsun olmasın) yönetir.
-                            startOrUpdateOverlayService()
+                item {
+                    Text(
+                        text = statusLog,
+                        color = Color(0xFF94A3B8),
+                        fontSize = 11.sp,
+                        modifier = Modifier.padding(4.dp)
+                    )
+                }
+            }
 
-                            val modeMsg = if (shizukuVerified) {
-                                "Shizuku Doğrulandı (Ölçek: $downscaleRatio, ${targetHz}Hz)"
-                            } else {
-                                "Standart Mod (Boş RAM: ${res.afterAvailRamMb} MB)"
-                            }
+            Spacer(modifier = Modifier.height(8.dp))
 
-                            Toast.makeText(context, "${app.name}: $modeMsg", Toast.LENGTH_LONG).show()
+            // MOTORU ATEŞLE & OYUNU BAŞLAT BUTONU
+            Button(
+                onClick = {
+                    if (!Settings.canDrawOverlays(this@MainActivity)) {
+                        Toast.makeText(this@MainActivity, "HUD göstergesi için 'Üstte Göster' izni verin.", Toast.LENGTH_LONG).show()
+                        startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
+                        return@Button
+                    }
 
-                            val launchIntent = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                    // Eğer kullanıcı %100 altı çözünürlük seçtiyse ve Pro/Reklam izni yoksa uyar
+                    if (resolutionScale < 0.99f && !monetizationManager.checkAccessStatus()) {
+                        Toast.makeText(this@MainActivity, "Donanım ölçekleme için yukarıdan 1 kısa reklam izleyin veya Pro'ya geçin!", Toast.LENGTH_LONG).show()
+                        return@Button
+                    }
+
+                    val pkg = selectedGame?.packageName ?: ""
+                    val profile = GameProfile(
+                        packageName = pkg,
+                        resolutionScale = resolutionScale,
+                        targetHz = targetHz,
+                        enableDnd = enableDnd,
+                        lowLatencyWifi = lowLatencyWifi
+                    )
+                    if (pkg.isNotEmpty()) {
+                        EngineManager.saveProfile(this@MainActivity, profile)
+                    }
+
+                    // Telemetri HUD Servisini Başlat
+                    val hudIntent = Intent(this@MainActivity, GameOverlayService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(hudIntent)
+                    } else {
+                        startService(hudIntent)
+                    }
+
+                    scope.launch {
+                        statusLog = EngineManager.applyOptimizationProfile(this@MainActivity, profile)
+                        if (pkg.isNotEmpty()) {
+                            val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
                             if (launchIntent != null) {
-                                context.startActivity(launchIntent)
+                                startActivity(launchIntent)
                             }
                         }
                     }
-                )
-                2 -> EngineSettingsTab(
-                    optimizer = optimizer,
-                    shizukuGranted = shizukuGranted,
-                    canWriteSettings = canWriteSettings,
-                    canDrawOverlays = canDrawOverlays,
-                    canUseDnd = canUseDnd,
-                    selectedPingServer = selectedPingServer,
-                    onPingServerChange = { server ->
-                        selectedPingServer = server
-                        optimizer.setSelectedPingServer(server)
-                    },
-                    autoDnd = autoDnd,
-                    onAutoDndChange = {
-                        autoDnd = it
-                        prefs.edit().putBoolean("auto_dnd", it).apply()
-                        // Tercih yalnızca kaydedilir; oyun oturumu aktifse hemen uygulanır.
-                        if (optimizer.isBoostSessionActive()) {
-                            scope.launch { optimizer.setDoNotDisturb(it) }
-                        }
-                    },
-                    wifiLowLatency = wifiLowLatency,
-                    onWifiLatencyChange = {
-                        wifiLowLatency = it
-                        prefs.edit().putBoolean("wifi_lock", it).apply()
-                        if (optimizer.isBoostSessionActive()) {
-                            optimizer.setLowLatencyWifiLock(it)
-                        }
-                    },
-                    showFloatingHud = showFloatingHud,
-                    onShowHudChange = {
-                        showFloatingHud = it
-                        prefs.edit().putBoolean("show_hud", it).apply()
-                        if (optimizer.isBoostSessionActive()) {
-                            startOrUpdateOverlayService()
-                        }
-                    },
-                    keepAwake = keepAwake,
-                    onKeepAwakeChange = {
-                        keepAwake = it
-                        prefs.edit().putBoolean("keep_awake", it).apply()
-                        if (optimizer.isBoostSessionActive()) {
-                            optimizer.setCpuSustainedWakeLock(it)
-                            startOrUpdateOverlayService()
-                        }
-                    }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun CockpitTab(
-    metrics: HardwareMetrics,
-    supportedHzList: List<Int>,
-    targetHz: Int,
-    downscaleRatio: String,
-    pingServer: PingServer,
-    onSelectHz: (Int) -> Unit,
-    onSelectDownscale: (String) -> Unit,
-    onTurboBoost: () -> Unit,
-    onRestoreNormal: () -> Unit
-) {
-    Column(modifier = Modifier.fillMaxSize()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            MetricCard(
-                modifier = Modifier.weight(1f),
-                title = "GÜNCEL EKRAN HZ",
-                value = "${metrics.currentDisplayHz} Hz",
-                subValue = if (metrics.shizukuActive) "SF Çizim FPS Hazır" else "Donanım Yenileme Hızı",
-                accentColor = Color(0xFF00E676)
-            )
-            MetricCard(
-                modifier = Modifier.weight(1f),
-                title = "BELLEK (BOŞ / TOPLAM)",
-                value = "${metrics.availRamMb} MB Boş",
-                subValue = "Kullanılan: %${metrics.ramPercent} (${metrics.usedRamMb}/${metrics.totalRamMb}MB)",
-                accentColor = Color(0xFF38BDF8)
-            )
-        }
-
-        Spacer(Modifier.height(10.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            MetricCard(
-                modifier = Modifier.weight(1f),
-                title = if (metrics.cpuTemp != null) "CPU & BATARYA ISISI" else "BATARYA ISISI",
-                value = if (metrics.cpuTemp != null) "${metrics.cpuTemp}°C" else "${metrics.batteryTemp}°C",
-                subValue = if (metrics.thermalThrottledByGuard) "⚠️ 43°C Termostat Korumasında!" else "Pil: ${metrics.batteryTemp}°C (Sınır: 43°C)",
-                accentColor = if (metrics.batteryTemp >= 42f || metrics.thermalThrottledByGuard) Color(0xFFEF4444) else Color(0xFFF59E0B)
-            )
-            MetricCard(
-                modifier = Modifier.weight(1f),
-                title = "GERÇEK TCP PİNG",
-                value = if (metrics.pingMs > 0) "${metrics.pingMs} ms" else "Ölçülüyor",
-                subValue = pingServer.label,
-                accentColor = Color(0xFFA855F7)
-            )
-        }
-
-        Spacer(Modifier.height(14.dp))
-
-        Text(
-            text = "1. DONANIMSAL EKRAN HZ SEÇİMİ (CİHAZIN DESTEKLEDİĞİ GERÇEK MODLAR)",
-            color = Color(0xFF94A3B8),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(Modifier.height(6.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            supportedHzList.forEach { hz ->
-                val isSelected = targetHz == hz
-                val subLabel = when {
-                    hz <= 60 -> "Pil Tasarrufu"
-                    hz == supportedHzList.last() -> "Maksimum Hz"
-                    else -> "Dengeli Akıcı"
-                }
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) Color(0xFF00E676).copy(alpha = 0.18f) else Color(0xFF131B2E))
-                        .border(
-                            width = 1.5.dp,
-                            color = if (isSelected) Color(0xFF00E676) else Color(0xFF1E293B),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .clickable { onSelectHz(hz) }
-                        .padding(vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = "$hz Hz",
-                        color = if (isSelected) Color(0xFF00E676) else Color.White,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 14.sp
-                    )
-                    Text(text = subLabel, color = Color(0xFF94A3B8), fontSize = 10.sp)
-                }
-            }
-        }
-
-        Spacer(Modifier.height(12.dp))
-
-        Text(
-            text = "2. SHIZUKU OYUN ÇÖZÜNÜRLÜK ÖLÇEĞİ (RESMİ 0.1 ADIMLI GAMEMANAGER)",
-            color = Color(0xFF94A3B8),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(Modifier.height(6.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf(
-                Triple("disable", "%100 Orijinal", "Tam Çözünürlük"),
-                Triple("0.8", "%80 Dengeli", "Önerilen +FPS"),
-                Triple("0.7", "%70 Rekabetçi", "Maksimum +FPS")
-            ).forEach { (ratio, title, sub) ->
-                val isSelected = downscaleRatio == ratio
-                Column(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isSelected) Color(0xFF38BDF8).copy(alpha = 0.18f) else Color(0xFF131B2E))
-                        .border(
-                            width = 1.5.dp,
-                            color = if (isSelected) Color(0xFF38BDF8) else Color(0xFF1E293B),
-                            shape = RoundedCornerShape(12.dp)
-                        )
-                        .clickable { onSelectDownscale(ratio) }
-                        .padding(vertical = 10.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    Text(
-                        text = title,
-                        color = if (isSelected) Color(0xFF38BDF8) else Color.White,
-                        fontWeight = FontWeight.ExtraBold,
-                        fontSize = 12.sp
-                    )
-                    Text(text = sub, color = Color(0xFF94A3B8), fontSize = 10.sp)
-                }
-            }
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(
-                    Brush.horizontalGradient(
-                        listOf(Color(0xFF00E676), Color(0xFF10B981))
-                    )
-                )
-                .clickable { onTurboBoost() },
-            contentAlignment = Alignment.Center
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.Bolt, contentDescription = null, tint = Color.Black)
-                Spacer(Modifier.width(8.dp))
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(50.dp)
+            ) {
                 Text(
-                    text = "${targetHz} HZ DOĞRULA & SİSTEMİ HAZIRLA",
+                    text = "MOTORU ATEŞLE & OYUNU BAŞLAT",
                     color = Color.Black,
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 14.sp
                 )
             }
-        }
 
-        Spacer(Modifier.height(8.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
-        OutlinedButton(
-            onClick = { onRestoreNormal() },
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(46.dp),
-            shape = RoundedCornerShape(12.dp)
-        ) {
-            Text(
-                text = "Oyun Bitti: Tüm Sistem & Çözünürlük Ayarlarını Sıfırla",
-                color = Color(0xFFF87171),
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp
-            )
-        }
-    }
-}
-
-@Composable
-fun MetricCard(
-    modifier: Modifier = Modifier,
-    title: String,
-    value: String,
-    subValue: String,
-    accentColor: Color
-) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF131B2E))
-            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(16.dp))
-            .padding(14.dp)
-    ) {
-        Text(text = title, color = Color(0xFF94A3B8), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(4.dp))
-        Text(text = value, color = accentColor, fontSize = 21.sp, fontWeight = FontWeight.ExtraBold)
-        Spacer(Modifier.height(4.dp))
-        Text(text = subValue, color = Color(0xFFCBD5E1), fontSize = 10.sp)
-    }
-}
-
-@Composable
-fun GamesLibraryTab(
-    apps: List<GameAppInfo>,
-    targetHz: Int,
-    downscaleRatio: String,
-    onLaunchGame: (GameAppInfo) -> Unit
-) {
-    var searchQuery by remember { mutableStateOf("") }
-    val filtered = remember(apps, searchQuery) {
-        apps.filter {
-            it.name.contains(searchQuery, ignoreCase = true) ||
-                    it.packageName.contains(searchQuery, ignoreCase = true)
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize()) {
-        OutlinedTextField(
-            value = searchQuery,
-            onValueChange = { searchQuery = it },
-            placeholder = { Text("Oyun veya paket adı ara...", color = Color.Gray) },
-            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-            shape = RoundedCornerShape(12.dp)
-        )
-
-        Spacer(Modifier.height(12.dp))
-
-        LazyColumn(
-            modifier = Modifier.fillMaxSize(),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            items(filtered, key = { it.packageName }) { app ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(Color(0xFF131B2E))
-                        .border(
-                            1.dp,
-                            if (app.isGameCategory) Color(0xFF00E676).copy(alpha = 0.5f) else Color(0xFF1E293B),
-                            RoundedCornerShape(14.dp)
-                        )
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = app.name,
-                                color = Color.White,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 15.sp
-                            )
-                            if (app.isGameCategory) {
-                                Spacer(Modifier.width(8.dp))
-                                Text(
-                                    text = "${targetHz}Hz | Ölçek: $downscaleRatio",
-                                    color = Color(0xFF00E676),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.ExtraBold
-                                )
-                            }
-                        }
-                        Text(
-                            text = app.packageName,
-                            color = Color(0xFF64748B),
-                            fontSize = 11.sp
-                        )
-                    }
-
-                    Button(
-                        onClick = { onLaunchGame(app) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E676)),
-                        shape = RoundedCornerShape(10.dp)
-                    ) {
-                        Text("Başlat", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            // ANA EKRAN ALT BANNER REKLAM ALANI (Sadece Ana Menüde Durur, Oyunda Asla Çıkmaz)
+            AndroidView(
+                modifier = Modifier.fillMaxWidth(),
+                factory = { ctx ->
+                    AdView(ctx).apply {
+                        setAdSize(AdSize.BANNER)
+                        // Resmi Google Test Banner ID (Yayınlarken kendi ID'ni koyacaksın)
+                        adUnitId = "ca-app-pub-3940256099942544/6300978111"
+                        loadAd(AdRequest.Builder().build())
                     }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-fun EngineSettingsTab(
-    optimizer: SystemOptimizer,
-    shizukuGranted: Boolean,
-    canWriteSettings: Boolean,
-    canDrawOverlays: Boolean,
-    canUseDnd: Boolean,
-    selectedPingServer: PingServer,
-    onPingServerChange: (PingServer) -> Unit,
-    autoDnd: Boolean,
-    onAutoDndChange: (Boolean) -> Unit,
-    wifiLowLatency: Boolean,
-    onWifiLatencyChange: (Boolean) -> Unit,
-    showFloatingHud: Boolean,
-    onShowHudChange: (Boolean) -> Unit,
-    keepAwake: Boolean,
-    onKeepAwakeChange: (Boolean) -> Unit
-) {
-    val context = LocalContext.current
-    val shizukuRunning = optimizer.isShizukuAvailable()
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0xFF131B2E))
-                    .border(
-                        1.5.dp,
-                        if (shizukuGranted) Color(0xFF00E676) else Color(0xFFF59E0B),
-                        RoundedCornerShape(14.dp)
-                    )
-                    .padding(16.dp)
-            ) {
-                Text(
-                    text = if (shizukuGranted) "SHIZUKU ADB MOTORU: AKTİF ✅"
-                    else if (shizukuRunning) "SHIZUKU ÇALIŞIYOR (YETKİ VERİLMEDİ)"
-                    else "SHIZUKU KAPALI VEYA YÜKLÜ DEĞİL",
-                    color = if (shizukuGranted) Color(0xFF00E676) else Color(0xFFF59E0B),
-                    fontWeight = FontWeight.ExtraBold,
-                    fontSize = 14.sp
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "SurfaceFlinger kare hızını okumak, oyunun çözünürlüğünü donanımsal ölçeklemek (0.8 / 0.7 Downscale) ve 43°C termostat korumalı performans modunu yönetmek için Shizuku yetkisi gerekir.",
-                    color = Color(0xFFCBD5E1),
-                    fontSize = 11.5.sp
-                )
-                Spacer(Modifier.height(10.dp))
-                Button(
-                    onClick = {
-                        if (!optimizer.isShizukuAvailable()) {
-                            Toast.makeText(
-                                context,
-                                "Önce Shizuku uygulamasını açıp Kablosuz Hata Ayıklama ile başlat kanka!",
-                                Toast.LENGTH_LONG
-                            ).show()
-                        } else if (!optimizer.hasShizukuPermission()) {
-                            try {
-                                Shizuku.requestPermission(1001)
-                            } catch (_: Throwable) {}
-                        } else {
-                            Toast.makeText(context, "Shizuku zaten bağlı ve aktif!", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = if (shizukuGranted) Color(0xFF059669) else Color(0xFF2563EB)
-                    )
-                ) {
-                    Text(
-                        if (shizukuGranted) "Shizuku ADB Bağlantısı Tamam ✅"
-                        else "Shizuku ADB Yetkisini Şimdi Bağla",
-                        color = Color.White,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-        }
-
-        item {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(Color(0xFF131B2E))
-                    .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
-                    .padding(14.dp)
-            ) {
-                Text(
-                    text = "PİNG ÖLÇÜM SUNUCUSU SEÇİMİ",
-                    color = Color.White,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 13.sp
-                )
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    PingServer.values().forEach { server ->
-                        val selected = selectedPingServer == server
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (selected) Color(0xFFA855F7).copy(alpha = 0.25f) else Color(0xFF090D16))
-                                .border(
-                                    1.dp,
-                                    if (selected) Color(0xFFA855F7) else Color(0xFF1E293B),
-                                    RoundedCornerShape(8.dp)
-                                )
-                                .clickable { onPingServerChange(server) }
-                                .padding(vertical = 8.dp, horizontal = 4.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = server.label,
-                                color = if (selected) Color(0xFFE9D5FF) else Color(0xFF94A3B8),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        item {
-            SettingToggleRow(
-                title = "Oyun İçi HUD Paneli",
-                subtitle = "Oyun üstünde ekran kare hızı, Hz, ısı ve ping gösterir. Kapalıyken de 43°C ısı koruması arka planda çalışır.",
-                checked = showFloatingHud,
-                onCheckedChange = onShowHudChange
             )
         }
-        item {
-            SettingToggleRow(
-                title = "Otomatik Rahatsız Etmeyin (DND) Modu",
-                subtitle = "Oyun sırasında bildirimleri susturur, sıfırlama yapıldığında veya HUD kapanınca eski haline döner.",
-                checked = autoDnd,
-                onCheckedChange = onAutoDndChange
-            )
-        }
-        item {
-            SettingToggleRow(
-                title = "Wi-Fi Radyo Uyanıklık Kilidi",
-                subtitle = "Wi-Fi çipinin uyku moduna girmesini önler (Not: Android 10+ düşük gecikme modunu ön plan aktiviteleriyle sınırlar).",
-                checked = wifiLowLatency,
-                onCheckedChange = onWifiLatencyChange
-            )
-        }
-        item {
-            SettingToggleRow(
-                title = "Ekran & CPU Uyanık Kalma Kilidi",
-                subtitle = "HUD penceresi üzerinden oyun sırasında ekranın kararmasını ve işlemcinin uyumasını engeller.",
-                checked = keepAwake,
-                onCheckedChange = onKeepAwakeChange
-            )
-        }
-
-        item {
-            Text(
-                text = "TEMEL ANDROID İZİNLERİ (DURUMLAR OTOMATİK GÜNCELLENİR)",
-                color = Color(0xFF94A3B8),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        item {
-            Button(
-                onClick = {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_WRITE_SETTINGS,
-                        Uri.parse("package:${context.packageName}")
-                    )
-                    context.startActivity(intent)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
-            ) {
-                Text(
-                    if (canWriteSettings) "1. Sistem Ayar İzni (Verildi ✅)"
-                    else "1. Sistem Ayarlarını Değiştirme İznini Aç",
-                    color = if (canWriteSettings) Color(0xFF00E676) else Color.White
-                )
-            }
-        }
-
-        item {
-            Button(
-                onClick = {
-                    val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:${context.packageName}")
-                    )
-                    context.startActivity(intent)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
-            ) {
-                Text(
-                    if (canDrawOverlays) "2. Üstte Gösterim / HUD İzni (Verildi ✅)"
-                    else "2. Üstte Gösterim (HUD) İznini Aç",
-                    color = if (canDrawOverlays) Color(0xFF00E676) else Color.White
-                )
-            }
-        }
-
-        item {
-            Button(
-                onClick = {
-                    val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
-                    context.startActivity(intent)
-                },
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B))
-            ) {
-                Text(
-                    if (canUseDnd) "3. DND Bildirim İzni (Verildi ✅)"
-                    else "3. Rahatsız Etmeyin (DND) İznini Aç",
-                    color = if (canUseDnd) Color(0xFF00E676) else Color.White
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun SettingToggleRow(
-    title: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0xFF131B2E))
-            .border(1.dp, Color(0xFF1E293B), RoundedCornerShape(14.dp))
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(text = title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Spacer(Modifier.height(4.dp))
-            Text(text = subtitle, color = Color(0xFF94A3B8), fontSize = 12.sp)
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(checkedThumbColor = Color.Black, checkedTrackColor = Color(0xFF00E676))
-        )
     }
 }
