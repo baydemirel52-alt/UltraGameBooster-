@@ -14,12 +14,40 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -32,6 +60,7 @@ import com.google.android.gms.ads.AdSize
 import com.google.android.gms.ads.AdView
 import kotlinx.coroutines.launch
 import rikka.shizuku.Shizuku
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
@@ -39,8 +68,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        EngineManager.backupOriginalDisplay(this)
-        EngineManager.installCrashSafetyRestore(this)
+        SystemOptimizer.backupOriginalDisplay(this)
+        SystemOptimizer.installCrashSafetyRestore(this)
         monetizationManager = MonetizationManager(this)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -67,11 +96,10 @@ class MainActivity : ComponentActivity() {
     fun UltraEngineMainScreen() {
         val scope = rememberCoroutineScope()
         val isProUnlocked by monetizationManager.isProUnlocked.collectAsState()
-        var shizukuReady by remember { mutableStateOf(EngineManager.isShizukuReady()) }
+        var shizukuReady by remember { mutableStateOf(SystemOptimizer.isShizukuReady()) }
         var installedGames by remember { mutableStateOf(emptyList<GameAppInfo>()) }
         var selectedGame by remember { mutableStateOf<GameAppInfo?>(null) }
 
-        // Profil Ayarları
         var resolutionScale by remember { mutableFloatStateOf(1.0f) }
         var targetHz by remember { mutableIntStateOf(120) }
         var enableDnd by remember { mutableStateOf(true) }
@@ -80,10 +108,10 @@ class MainActivity : ComponentActivity() {
         var showShizukuWizard by remember { mutableStateOf(false) }
 
         LaunchedEffect(Unit) {
-            installedGames = EngineManager.getInstalledGames(this@MainActivity)
+            installedGames = SystemOptimizer.getInstalledGames(this@MainActivity)
             if (installedGames.isNotEmpty()) {
                 selectedGame = installedGames.first()
-                val prof = EngineManager.loadProfile(this@MainActivity, installedGames.first().packageName)
+                val prof = SystemOptimizer.loadProfile(this@MainActivity, installedGames.first().packageName)
                 resolutionScale = prof.resolutionScale
                 targetHz = prof.targetHz
                 enableDnd = prof.enableDnd
@@ -97,7 +125,6 @@ class MainActivity : ComponentActivity() {
                 .background(Color(0xFF080B12))
                 .padding(16.dp)
         ) {
-            // ÜST BAŞLIK & ACİL EKRAN SIFIRLAMA BUTONU
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -120,7 +147,7 @@ class MainActivity : ComponentActivity() {
 
                 Button(
                     onClick = {
-                        val msg = EngineManager.restoreOriginalSystemSettings(this@MainActivity)
+                        val msg = SystemOptimizer.restoreOriginalSystemSettings(this@MainActivity)
                         stopService(Intent(this@MainActivity, GameOverlayService::class.java))
                         statusLog = msg
                         Toast.makeText(this@MainActivity, msg, Toast.LENGTH_SHORT).show()
@@ -132,9 +159,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // SHIZUKU KURULUM SİHİRBAZI KARTI (Normal Kullanıcılar İçin Rehber)
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF121824)),
                 modifier = Modifier
@@ -148,13 +174,13 @@ class MainActivity : ComponentActivity() {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = if (shizukuReady) "✅ Shizuku Donanım Yetkisi Bağlı" else "⚡ Donanım Kilidini Aç (Shizuku Rehberi)",
+                            text = if (shizukuReady) "Shizuku Donanım Yetkisi Bağlı" else "Donanım Kilidini Aç (Shizuku Rehberi)",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp
                         )
                         TextButton(onClick = {
-                            shizukuReady = EngineManager.isShizukuReady()
+                            shizukuReady = SystemOptimizer.isShizukuReady()
                             showShizukuWizard = !showShizukuWizard
                         }) {
                             Text(if (showShizukuWizard) "Gizle" else "Kurulumu Gör", color = Color(0xFF00E5FF))
@@ -163,10 +189,10 @@ class MainActivity : ComponentActivity() {
 
                     if (showShizukuWizard) {
                         Text(
-                            text = "Çözünürlük ölçekleme ve gerçek FPS ölçümü için Rotsuz ADB yetkisi gerekir:\n" +
+                            text = "Çözünürlük ölçekleme ve gerçek FPS ölçümü için Rootsuz ADB yetkisi gerekir:\n" +
                                     "1. Shizuku uygulamasını indirip açın.\n" +
                                     "2. Geliştirici Seçenekleri -> Kablosuz Hata Ayıklama ile Shizuku'yu başlatın.\n" +
-                                    "3. 'Yetki İste' butonuna basıp Ultra Motoru ateşleyin.",
+                                    "3. 'Yetki Bağla' butonuna basıp Ultra Motoru ateşleyin.",
                             color = Color(0xFF94A3B8),
                             fontSize = 12.sp
                         )
@@ -178,7 +204,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("1. Shizuku İndir", fontSize = 11.sp)
+                                Text("1. Shizuku", fontSize = 11.sp)
                             }
                             OutlinedButton(
                                 onClick = {
@@ -190,7 +216,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Text("2. Geliştirici Ayarı", fontSize = 11.sp)
+                                Text("2. Geliştirici", fontSize = 11.sp)
                             }
                             Button(
                                 onClick = {
@@ -201,7 +227,7 @@ class MainActivity : ComponentActivity() {
                                             Toast.makeText(this@MainActivity, "Önce Shizuku uygulamasını başlatın.", Toast.LENGTH_SHORT).show()
                                         }
                                     } catch (_: Exception) {}
-                                    shizukuReady = EngineManager.isShizukuReady()
+                                    shizukuReady = SystemOptimizer.isShizukuReady()
                                 },
                                 modifier = Modifier.weight(1f)
                             ) {
@@ -212,9 +238,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // PRO / ÖDÜLLÜ REKLAM DURUM BARI (Para Kazanma Modülü)
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1A142E)),
                 modifier = Modifier
@@ -230,7 +255,7 @@ class MainActivity : ComponentActivity() {
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isProUnlocked) "🔥 ULTRA PRO AKTİF (${monetizationManager.getRemainingRewardMinutes()} dk)" else "🔒 ULTRA DONANIM AYARLARI KİLİTLİ",
+                            text = if (isProUnlocked) "ULTRA PRO AKTİF (${monetizationManager.getRemainingRewardMinutes()} dk)" else "ULTRA DONANIM AYARLARI KİLİTLİ",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
@@ -249,7 +274,7 @@ class MainActivity : ComponentActivity() {
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF00E5FF)),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                         ) {
-                            Text("Reklam İzle (3s)", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text("Reklam (3s)", color = Color.Black, fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                         Button(
                             onClick = {
@@ -264,9 +289,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
-            // ORTA ALAN: OYUN SEÇİCİ VE PERFORMANS KONTROLLERİ
             LazyColumn(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -275,7 +299,7 @@ class MainActivity : ComponentActivity() {
                     Text("1. Optimize Edilecek Oyunu Seçin:", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
 
-                items(installedGames.take(6)) { game ->
+                items(installedGames.take(8)) { game ->
                     val isSelected = selectedGame?.packageName == game.packageName
                     Row(
                         modifier = Modifier
@@ -291,7 +315,7 @@ class MainActivity : ComponentActivity() {
                             )
                             .clickable {
                                 selectedGame = game
-                                val prof = EngineManager.loadProfile(this@MainActivity, game.packageName)
+                                val prof = SystemOptimizer.loadProfile(this@MainActivity, game.packageName)
                                 resolutionScale = prof.resolutionScale
                                 targetHz = prof.targetHz
                                 enableDnd = prof.enableDnd
@@ -350,10 +374,11 @@ class MainActivity : ComponentActivity() {
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.padding(12.dp)) {
+                            val scalePercent = (resolutionScale * 100f).roundToInt()
                             Text("3. Ultra Donanım Motoru (Android Game API & Shizuku)", color = Color(0xFF00E5FF), fontWeight = FontWeight.Bold, fontSize = 13.sp)
                             Spacer(modifier = Modifier.height(6.dp))
                             Text(
-                                text = "Çözünürlük Ölçekleme: %${(resolutionScale * 100).toInt()} (GPU Yükünü Düşürür)",
+                                text = "Çözünürlük Ölçekleme: %$scalePercent (GPU Yükünü Düşürür)",
                                 color = Color.White,
                                 fontSize = 12.sp
                             )
@@ -379,18 +404,28 @@ class MainActivity : ComponentActivity() {
                 }
 
                 item {
-                    Text(
-                        text = statusLog,
-                        color = Color(0xFF94A3B8),
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(4.dp)
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = statusLog,
+                            color = Color(0xFF94A3B8),
+                            fontSize = 11.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        TextButton(onClick = {
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://baydemirel52-alt.github.io/")))
+                        }) {
+                            Text("Gizlilik Politikası", color = Color(0xFF64748B), fontSize = 11.sp)
+                        }
+                    }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // MOTORU ATEŞLE & OYUNU BAŞLAT BUTONU
             Button(
                 onClick = {
                     if (!Settings.canDrawOverlays(this@MainActivity)) {
@@ -399,7 +434,6 @@ class MainActivity : ComponentActivity() {
                         return@Button
                     }
 
-                    // Eğer kullanıcı %100 altı çözünürlük seçtiyse ve Pro/Reklam izni yoksa uyar
                     if (resolutionScale < 0.99f && !monetizationManager.checkAccessStatus()) {
                         Toast.makeText(this@MainActivity, "Donanım ölçekleme için yukarıdan 1 kısa reklam izleyin veya Pro'ya geçin!", Toast.LENGTH_LONG).show()
                         return@Button
@@ -414,10 +448,9 @@ class MainActivity : ComponentActivity() {
                         lowLatencyWifi = lowLatencyWifi
                     )
                     if (pkg.isNotEmpty()) {
-                        EngineManager.saveProfile(this@MainActivity, profile)
+                        SystemOptimizer.saveProfile(this@MainActivity, profile)
                     }
 
-                    // Telemetri HUD Servisini Başlat
                     val hudIntent = Intent(this@MainActivity, GameOverlayService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         startForegroundService(hudIntent)
@@ -426,7 +459,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     scope.launch {
-                        statusLog = EngineManager.applyOptimizationProfile(this@MainActivity, profile)
+                        statusLog = SystemOptimizer.applyOptimizationProfile(this@MainActivity, profile)
                         if (pkg.isNotEmpty()) {
                             val launchIntent = packageManager.getLaunchIntentForPackage(pkg)
                             if (launchIntent != null) {
@@ -450,13 +483,11 @@ class MainActivity : ComponentActivity() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // ANA EKRAN ALT BANNER REKLAM ALANI (Sadece Ana Menüde Durur, Oyunda Asla Çıkmaz)
             AndroidView(
                 modifier = Modifier.fillMaxWidth(),
                 factory = { ctx ->
                     AdView(ctx).apply {
                         setAdSize(AdSize.BANNER)
-                        // Resmi Google Test Banner ID (Yayınlarken kendi ID'ni koyacaksın)
                         adUnitId = "ca-app-pub-3940256099942544/6300978111"
                         loadAd(AdRequest.Builder().build())
                     }
