@@ -1,21 +1,34 @@
 package com.selim.ultragameengine
 
 import android.annotation.SuppressLint
-import android.app.*
+import android.app.ActivityManager
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
-import android.os.BatteryManager
 import android.os.Build
 import android.os.IBinder
-import android.view.*
+import android.view.Choreographer
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.math.roundToInt
@@ -27,7 +40,6 @@ class GameOverlayService : Service(), Choreographer.FrameCallback {
     private var telemetryText: TextView? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    // Choreographer Ekran Hz Sayacı (Standart Mod İçin)
     private var lastFrameTimeNanos = 0L
     private var frameCount = 0
     private var currentScreenHz = 60
@@ -68,21 +80,24 @@ class GameOverlayService : Service(), Choreographer.FrameCallback {
             nm.createNotificationChannel(channel)
         }
 
-        // Bildirimdeki "Ekranı Orijinale Döndür (Acil Reset)" Butonu
         val resetIntent = Intent(this, EmergencyRestoreReceiver::class.java).apply {
             action = "com.selim.ultragameengine.ACTION_EMERGENCY_RESET"
         }
         val resetPendingIntent = PendingIntent.getBroadcast(
-            this, 101, resetIntent,
+            this,
+            101,
+            resetIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             Notification.Builder(this, channelId)
         } else {
             @Suppress("DEPRECATION")
             Notification.Builder(this)
         }
+
+        val notification = builder
             .setContentTitle("Ultra Game Engine Aktif")
             .setContentText("Canlı telemetri çalışıyor. Çıkışta ekranı sıfırlayabilirsiniz.")
             .setSmallIcon(android.R.drawable.ic_media_play)
@@ -111,14 +126,17 @@ class GameOverlayService : Service(), Choreographer.FrameCallback {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
 
+        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            WindowManager.LayoutParams.TYPE_PHONE
+        }
+
         val params = WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            else
-                @Suppress("DEPRECATION")
-                WindowManager.LayoutParams.TYPE_PHONE,
+            overlayType,
             layoutFlags,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -145,7 +163,6 @@ class GameOverlayService : Service(), Choreographer.FrameCallback {
 
         hudLayout?.addView(telemetryText)
 
-        // Sürükle-Bırak Desteği (Oyun Tuşlarını Kapatmaması İçin İstediğin Köşeye Çekebilirsin)
         var initialX = 0
         var initialY = 0
         var initialTouchX = 0f
@@ -177,20 +194,19 @@ class GameOverlayService : Service(), Choreographer.FrameCallback {
         serviceScope.launch {
             while (isActive) {
                 val pingMs = measureRealPing()
-                val tempC = getBatteryTemp()
+                val tempC = withContext(Dispatchers.IO) {
+                    SystemOptimizer.getDeviceTemperature(this@GameOverlayService)
+                }
                 val freeRamMb = getAvailableRamMb()
-                val hwFps = withContext(Dispatchers.IO) { EngineManager.getHardwareRealFps() }
-
-                val fpsLabel = if (hwFps > 0) {
-                    "FPS: $hwFps"
-                } else {
-                    "Hz: $currentScreenHz"
+                val hwFps = withContext(Dispatchers.IO) {
+                    SystemOptimizer.getHardwareRealFps()
                 }
 
-                val thermalWarn = if (tempC >= 43.0f) " ⚠️SICAK!" else ""
+                val fpsLabel = if (hwFps > 0) "FPS: $hwFps" else "Hz: $currentScreenHz"
+                val thermalWarn = if (tempC >= 43.0f) " SICAK!" else ""
+
                 telemetryText?.text = "$fpsLabel  |  ${pingMs}ms  |  ${tempC}°C$thermalWarn  |  RAM: ${freeRamMb}MB"
 
-                // Sıcaklık 43 dereceyi geçerse rengi turuncu/kırmızıya çevirerek uyar
                 if (tempC >= 43.0f) {
                     telemetryText?.setTextColor(Color.parseColor("#FF5252"))
                 } else {
@@ -214,17 +230,11 @@ class GameOverlayService : Service(), Choreographer.FrameCallback {
         }
     }
 
-    private fun getBatteryTemp(): Float {
-        val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val temp = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
-        return (temp / 10f)
-    }
-
     private fun getAvailableRamMb(): Long {
         val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memInfo = ActivityManager.MemoryInfo()
         am.getMemoryInfo(memInfo)
-        return memInfo.availMem / (1024 * 1024)
+        return memInfo.availMem / 1048576L
     }
 
     override fun onDestroy() {
