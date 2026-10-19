@@ -10,8 +10,8 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
+        maven { url = uri("https://jitpack.io") }
     }
 }
-rootProject.name = "UltraGameBooster"
+rootProject.name = "UltraGameEngine"
 include(":app")
-
