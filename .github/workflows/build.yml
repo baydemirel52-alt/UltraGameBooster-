@@ -1,4 +1,4 @@
-name: Build Ultra Game Engine APK
+name: Ultra Game Engine - Play Store AAB & APK Build
 
 on:
   push:
@@ -10,25 +10,48 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Depoyu Cek
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: JDK 17 Kur
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+      - name: Android SDK Kur
+        uses: android-actions/setup-android@v3
+
+      - name: Gradle 8.9 Kur (Wrapper Hatasini Onler)
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.9'
 
-      - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Sabit Dijital Imza (Keystore) Olustur
+        run: |
+          mkdir -p app/keystore
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/keystore/release.keystore
+          else
+            keytool -genkey -v \
+              -keystore app/keystore/release.keystore \
+              -alias ultragamekey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass ultragame123 -keypass ultragame123 \
+              -dname "CN=UltraGameEngine, OU=Mobile, O=SelimDev, L=Ordu, S=Ordu, C=TR"
+          fi
 
-      - name: Upload APK Artifact
+      - name: Play Store AAB ve Test APK Derle
+        run: gradle assembleRelease bundleRelease --stacktrace
+
+      - name: Play Store AAB Dosyasini Yukle
         uses: actions/upload-artifact@v4
         with:
-          name: UltraGameEngine-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: UltraGameEngine-PlayStore-Bundle-AAB
+          path: app/build/outputs/bundle/release/*.aab
+
+      - name: Kurulabilir APK Dosyasini Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: UltraGameEngine-Installable-APK
+          path: app/build/outputs/apk/release/*.apk
