@@ -3,7 +3,15 @@ package com.selim.ultragameengine
 import android.app.Activity
 import android.content.Context
 import android.widget.Toast
-import com.android.billingclient.api.*
+import com.android.billingclient.api.BillingClient
+import com.android.billingclient.api.BillingClientStateListener
+import com.android.billingclient.api.BillingFlowParams
+import com.android.billingclient.api.BillingResult
+import com.android.billingclient.api.PendingPurchasesParams
+import com.android.billingclient.api.Purchase
+import com.android.billingclient.api.PurchasesUpdatedListener
+import com.android.billingclient.api.QueryProductDetailsParams
+import com.android.billingclient.api.QueryPurchasesParams
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.LoadAdError
 import com.google.android.gms.ads.MobileAds
@@ -11,13 +19,13 @@ import com.google.android.gms.ads.rewarded.RewardedAd
 import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import java.util.concurrent.TimeUnit
 
 class MonetizationManager(private val context: Context) : PurchasesUpdatedListener {
     private val prefs = context.getSharedPreferences("monetization_prefs", Context.MODE_PRIVATE)
     private var rewardedAd: RewardedAd? = null
     private var billingClient: BillingClient? = null
 
-    // Google AdMob Resmi Test Ödüllü Reklam ID'si (Yayınlarken kendi AdMob birim ID'ni koyacaksın)
     private val rewardedAdUnitId = "ca-app-pub-3940256099942544/5224354917"
     private val proProductId = "ultra_game_engine_pro_lifetime"
 
@@ -30,7 +38,6 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
         setupBillingClient()
     }
 
-    // Kullanıcının Ömür Boyu Pro'su veya 3 Saatlik Reklam Süresi Var mı?
     fun checkAccessStatus(): Boolean {
         val isLifetimePro = prefs.getBoolean("is_lifetime_pro", false)
         val rewardExpiryTime = prefs.getLong("reward_expiry_time", 0L)
@@ -41,7 +48,7 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
         if (prefs.getBoolean("is_lifetime_pro", false)) return 999999L
         val expiry = prefs.getLong("reward_expiry_time", 0L)
         val diff = expiry - System.currentTimeMillis()
-        return if (diff > 0) diff / (1000 * 60) else 0L
+        return if (diff > 0L) TimeUnit.MILLISECONDS.toMinutes(diff) else 0L
     }
 
     private fun loadRewardedAd() {
@@ -56,12 +63,11 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
         })
     }
 
-    // 1 Kısa Reklam İzlet -> 3 Saat Ultra Motor Kilidini Aç
     fun showRewardedAdFor3Hours(activity: Activity, onUnlocked: () -> Unit) {
         val ad = rewardedAd
         if (ad != null) {
             ad.show(activity) {
-                val threeHoursMs = 3 * 60 * 60 * 1000L
+                val threeHoursMs = TimeUnit.HOURS.toMillis(3)
                 prefs.edit().putLong("reward_expiry_time", System.currentTimeMillis() + threeHoursMs).apply()
                 _isProUnlocked.value = true
                 Toast.makeText(context, "Ultra Motor 3 Saatliğine Aktif Edildi!", Toast.LENGTH_LONG).show()
@@ -69,8 +75,7 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
                 onUnlocked()
             }
         } else {
-            // Reklam henüz yüklenmediyse kullanıcıyı mağdur etme, 30 dk geçici izin ver ve reklamı tekrar yükle
-            val thirtyMinMs = 30 * 60 * 1000L
+            val thirtyMinMs = TimeUnit.MINUTES.toMillis(30)
             prefs.edit().putLong("reward_expiry_time", System.currentTimeMillis() + thirtyMinMs).apply()
             _isProUnlocked.value = true
             Toast.makeText(context, "Reklam hazır değil, 30 Dk Ücretsiz Ultra Motor tanımlandı!", Toast.LENGTH_SHORT).show()
@@ -79,7 +84,6 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
         }
     }
 
-    // Google Play Billing Kurulumu
     private fun setupBillingClient() {
         billingClient = BillingClient.newBuilder(context)
             .setListener(this)
