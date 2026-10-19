@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Dış Siber Türbin Halkası -->
+    <path
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="3.5"
+        android:fillColor="#00000000"
+        android:pathData="M54,24A30,30 0,1 1,24 54A30,30 0,0 1,54 24Z" />
+    <!-- İç Mor Güç Çemberi -->
+    <path
+        android:strokeColor="#7C4DFF"
+        android:strokeWidth="2.5"
+        android:fillColor="#1500E5FF"
+        android:pathData="M54,31A23,23 0,1 1,31 54A23,23 0,0 1,54 31Z" />
+    <!-- Merkez Şimşek Çekirdeği -->
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M58,28L40,56H53L48,80L68,50H55L58,28Z" />
+</vector>
