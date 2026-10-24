@@ -39,7 +39,9 @@ object SystemOptimizer {
     private const val KEY_IS_MODIFIED = "is_display_modified"
 
     private var wifiLock: WifiManager.WifiLock? = null
-    private var cachedCpuThermalPath: String? = null
+    private var cachedCpuZonePaths: List<String>? = null
+    private var cachedFpsLayer: String? = null
+    private var cachedFpsLayerPkg: String? = null
 
     // Shizuku 13.1.5 içindeki private newProcess metoduna güvenli Reflection erişimi
     private val shizukuNewProcessMethod: Method? by lazy {
@@ -215,22 +217,22 @@ object SystemOptimizer {
         return "Standart ağ ve bildirim ayarları sıfırlandı."
     }
 
-    fun getHardwareRealFps(): Int {
-        if (!isShizukuReady()) return -1
+    // --- Gerçek FPS: oyunun kendi SurfaceFlinger katmanından okunur (Shizuku gerekir) ---
+    fun getHardwareRealFps(gamePackage: String): Int {
+        if (!isShizukuReady() || gamePackage.isBlank()) return -1
         return try {
-            val dump = runShizukuCommand("dumpsys SurfaceFlinger --latency")
-            if (dump.isNotEmpty()) {
-                val lines = dump.lines().filter { it.isNotBlank() }
-                if (lines.size > 4) {
-                    val lastParts = lines.last().split("\\s+".toRegex())
-                    val prevParts = lines[lines.size - 2].split("\\s+".toRegex())
-                    if (lastParts.size >= 2 && prevParts.size >= 2) {
-                        val deltaNs = lastParts[1].toLong() - prevParts[1].toLong()
-                        if (deltaNs > 0L) {
-                            val fps = (1_000_000_000L / deltaNs).toInt()
-                            return fps.coerceIn(1, 165)
-                        }
-                    }
+            val cached = cachedFpsLayer.takeIf { cachedFpsLayerPkg == gamePackage }
+            if (cached != null) {
+                val fps = fpsFromLatency(cached)
+                if (fps > 0) return fps
+                cachedFpsLayer = null // oyun yeniden açılmış olabilir, katmanı yeniden ara
+            }
+            for (layer in findGameLayers(gamePackage)) {
+                val fps = fpsFromLatency(layer)
+                if (fps > 0) {
+                    cachedFpsLayer = layer
+                    cachedFpsLayerPkg = gamePackage
+                    return fps
                 }
             }
             -1
@@ -239,36 +241,75 @@ object SystemOptimizer {
         }
     }
 
-    // Sentez Hatasız CPU Termal Sensör & Pil Sıcaklığı Okuyucu
-    fun getDeviceTemperature(context: Context): Float {
-        if (isShizukuReady()) {
-            try {
-                val path = cachedCpuThermalPath ?: resolveCpuThermalZonePath()
-                if (path.isNotEmpty()) {
-                    val raw = runShizukuCommand("cat $path").toFloatOrNull()
-                    if (raw != null && raw > 0f) {
-                        val tempC = if (raw > 1000f) raw / 1000f else if (raw > 100f) raw / 10f else raw
-                        if (tempC in 20f..95f) return ((tempC * 10f).roundToInt() / 10f)
-                    }
-                }
-            } catch (_: Exception) {}
-        }
+    private fun findGameLayers(pkg: String): List<String> {
+        val layers = runShizukuCommand("dumpsys SurfaceFlinger --list")
+            .lines()
+            .map { it.trim() }
+            .filter { it.contains(pkg) && !it.startsWith("Background for") && !it.startsWith("Bounds for") }
+        val surfaceViews = layers.filter { it.startsWith("SurfaceView") }
+        return (surfaceViews.filter { it.contains("BLAST") } + surfaceViews + layers).distinct().take(4)
+    }
+
+    private fun fpsFromLatency(layer: String): Int {
+        val safe = layer.replace("'", "'\\''")
+        val times = runShizukuCommand("dumpsys SurfaceFlinger --latency '$safe'")
+            .lines()
+            .drop(1)
+            .mapNotNull { line ->
+                val p = line.trim().split("\\s+".toRegex())
+                val t = if (p.size >= 3) p[1].toLongOrNull() else null
+                if (t == null || t <= 0L || t == Long.MAX_VALUE) null else t
+            }
+        val newest = times.maxOrNull() ?: return -1
+        // Veri bayatsa (oyun kare üretmiyorsa) eski bir sayıyı göstermeyelim
+        if (System.nanoTime() - newest > 3_000_000_000L) return -1
+        val recent = times.filter { it >= newest - 1_000_000_000L }
+        if (recent.size < 2) return -1
+        val span = (recent.maxOrNull() ?: return -1) - (recent.minOrNull() ?: return -1)
+        if (span <= 0L) return -1
+        return ((recent.size - 1) * 1_000_000_000.0 / span).roundToInt().coerceIn(1, 165)
+    }
+
+    // --- Sıcaklık: pil ve CPU ayrı okunur ---
+    fun getBatteryTemperature(context: Context): Float {
         val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
         val temp = intent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0
         return temp / 10f
     }
 
-    private fun resolveCpuThermalZonePath(): String {
-        for (i in 0..15) {
-            val zoneDir = "/sys/class/thermal/thermal_zone$i"
-            val type = runShizukuCommand("cat $zoneDir/type").lowercase()
-            if (type.contains("cpu") || type.contains("soc") || type.contains("tsens") || type.contains("big")) {
-                cachedCpuThermalPath = "$zoneDir/temp"
-                return "$zoneDir/temp"
-            }
+    // CPU çekirdek sensörlerinin en yükseği; okunamazsa -1 (Shizuku gerekir)
+    fun getCpuTemperature(): Float {
+        if (!isShizukuReady()) return -1f
+        return try {
+            val paths = cachedCpuZonePaths ?: resolveCpuThermalZonePaths()
+            if (paths.isEmpty()) return -1f
+            val maxC = runShizukuCommand("cat " + paths.joinToString(" ") + " 2>/dev/null")
+                .lines()
+                .mapNotNull { it.trim().toFloatOrNull() }
+                .map { raw -> if (raw > 1000f) raw / 1000f else if (raw > 100f) raw / 10f else raw }
+                .filter { it in 20f..120f }
+                .maxOrNull() ?: return -1f
+            (maxC * 10f).roundToInt() / 10f
+        } catch (_: Exception) {
+            -1f
         }
-        cachedCpuThermalPath = "/sys/class/thermal/thermal_zone0/temp"
-        return "/sys/class/thermal/thermal_zone0/temp"
+    }
+
+    private fun resolveCpuThermalZonePaths(): List<String> {
+        val zones = runShizukuCommand("for z in /sys/class/thermal/thermal_zone*; do echo \"\$z \$(cat \$z/type 2>/dev/null)\"; done")
+            .lines()
+            .mapNotNull { line ->
+                val parts = line.trim().split(" ", limit = 2)
+                if (parts.size == 2) parts[0] to parts[1].lowercase() else null
+            }
+        var cpuZones = zones.filter { (_, type) ->
+            type.contains("cpu") || type.contains("soc") || type.contains("big") ||
+                type.contains("little") || type == "mid"
+        }
+        if (cpuZones.isEmpty()) cpuZones = zones.filter { (_, type) -> type.contains("tsens") }.take(8)
+        val paths = cpuZones.map { "${it.first}/temp" }
+        cachedCpuZonePaths = paths
+        return paths
     }
 
     fun getInstalledGames(context: Context): List<GameAppInfo> {

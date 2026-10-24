@@ -15,7 +15,6 @@ import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
-import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.WindowManager
@@ -33,39 +32,27 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import kotlin.math.roundToInt
 
-class GameOverlayService : Service(), Choreographer.FrameCallback {
+class GameOverlayService : Service() {
 
     private var windowManager: WindowManager? = null
     private var hudLayout: LinearLayout? = null
     private var telemetryText: TextView? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    private var lastFrameTimeNanos = 0L
-    private var frameCount = 0
-    private var currentScreenHz = 60
+    @Volatile private var gamePackage = ""
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        intent?.getStringExtra("game_pkg")?.let { gamePackage = it }
+        return super.onStartCommand(intent, flags, startId)
+    }
 
     override fun onCreate() {
         super.onCreate()
         startForegroundWithEmergencyAction()
         createDraggableTelemetryHud()
-        Choreographer.getInstance().postFrameCallback(this)
         startTelemetryLoop()
-    }
-
-    override fun doFrame(frameTimeNanos: Long) {
-        if (lastFrameTimeNanos == 0L) {
-            lastFrameTimeNanos = frameTimeNanos
-        }
-        frameCount++
-        val diff = frameTimeNanos - lastFrameTimeNanos
-        if (diff >= 1_000_000_000L) {
-            currentScreenHz = frameCount
-            frameCount = 0
-            lastFrameTimeNanos = frameTimeNanos
-        }
-        Choreographer.getInstance().postFrameCallback(this)
     }
 
     private fun startForegroundWithEmergencyAction() {
@@ -194,20 +181,20 @@ class GameOverlayService : Service(), Choreographer.FrameCallback {
         serviceScope.launch {
             while (isActive) {
                 val pingMs = measureRealPing()
-                val tempC = withContext(Dispatchers.IO) {
-                    SystemOptimizer.getDeviceTemperature(this@GameOverlayService)
-                }
+                val cpuC = withContext(Dispatchers.IO) { SystemOptimizer.getCpuTemperature() }
+                val batC = SystemOptimizer.getBatteryTemperature(this@GameOverlayService)
                 val freeRamMb = getAvailableRamMb()
-                val hwFps = withContext(Dispatchers.IO) {
-                    SystemOptimizer.getHardwareRealFps()
-                }
+                val pkg = gamePackage
+                val hwFps = withContext(Dispatchers.IO) { SystemOptimizer.getHardwareRealFps(pkg) }
 
-                val fpsLabel = if (hwFps > 0) "FPS: $hwFps" else "Hz: $currentScreenHz"
-                val thermalWarn = if (tempC >= 43.0f) " SICAK!" else ""
+                val fpsLabel = if (hwFps > 0) "FPS: $hwFps" else "FPS: --"
+                val cpuLabel = if (cpuC > 0f) "CPU ${cpuC}°  |  " else ""
+                val isHot = batC >= 43.0f || cpuC >= 85.0f
+                val thermalWarn = if (isHot) " SICAK!" else ""
 
-                telemetryText?.text = "$fpsLabel  |  ${pingMs}ms  |  ${tempC}°C$thermalWarn  |  RAM: ${freeRamMb}MB"
+                telemetryText?.text = "$fpsLabel  |  ${pingMs}ms  |  ${cpuLabel}PİL ${batC}°$thermalWarn  |  RAM: ${freeRamMb}MB"
 
-                if (tempC >= 43.0f) {
+                if (isHot) {
                     telemetryText?.setTextColor(Color.parseColor("#FF5252"))
                 } else {
                     telemetryText?.setTextColor(Color.parseColor("#00E5FF"))
@@ -239,7 +226,6 @@ class GameOverlayService : Service(), Choreographer.FrameCallback {
 
     override fun onDestroy() {
         super.onDestroy()
-        Choreographer.getInstance().removeFrameCallback(this)
         serviceScope.cancel()
         if (hudLayout != null) {
             windowManager?.removeView(hudLayout)

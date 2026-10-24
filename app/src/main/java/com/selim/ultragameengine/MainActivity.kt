@@ -465,6 +465,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val hudIntent = Intent(this@MainActivity, GameOverlayService::class.java)
+                    hudIntent.putExtra("game_pkg", pkg)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         startForegroundService(hudIntent)
                     } else {
