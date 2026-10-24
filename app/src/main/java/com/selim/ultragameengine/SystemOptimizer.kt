@@ -170,9 +170,9 @@ object SystemOptimizer {
                 val origW = prefs.getInt(KEY_ORIG_WIDTH, 1080)
                 val origH = prefs.getInt(KEY_ORIG_HEIGHT, 2400)
                 val scaledW = (origW / (1.0f / profile.resolutionScale)).roundToInt()
-                val scaledH = (origH / (1.0f / profile.resolutionScale)).roundToInt()
                 val targetW = (scaledW / 8) * 8
-                val targetH = (scaledH / 8) * 8
+                // Yükseklik, orijinal en-boy oranı bozulmayacak şekilde genişlikten türetilir
+                val targetH = ((targetW.toFloat() * origH / origW).roundToInt() / 2) * 2
                 runShizukuCommand("wm size ${targetW}x${targetH}")
                 // Yoğunluğu (DPI) da aynı oranda düşür; yoksa arayüz ekrana göre büyük görünür
                 val origDensity = prefs.getInt(KEY_ORIG_DENSITY, 0)
