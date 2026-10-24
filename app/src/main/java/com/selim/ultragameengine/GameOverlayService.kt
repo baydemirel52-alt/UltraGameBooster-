@@ -188,11 +188,11 @@ class GameOverlayService : Service() {
                 val hwFps = withContext(Dispatchers.IO) { SystemOptimizer.getHardwareRealFps(pkg) }
 
                 val fpsLabel = if (hwFps > 0) "FPS: $hwFps" else "FPS: -- (${SystemOptimizer.fpsStatus})"
-                val cpuLabel = if (cpuC > 0f) "CPU ${cpuC}°  |  " else ""
+                val cpuLabel = if (cpuC > 0f) "CPU ${cpuC}° | " else ""
                 val isHot = batC >= 43.0f || cpuC >= 85.0f
                 val thermalWarn = if (isHot) " SICAK!" else ""
 
-                telemetryText?.text = "$fpsLabel  |  ${pingMs}ms  |  ${cpuLabel}PİL ${batC}°$thermalWarn  |  RAM: ${freeRamMb}MB"
+                telemetryText?.text = "$fpsLabel | ${pingMs}ms | ${cpuLabel}PİL ${batC}°$thermalWarn | RAM: ${freeRamMb}MB"
 
                 if (isHot) {
                     telemetryText?.setTextColor(Color.parseColor("#FF5252"))
