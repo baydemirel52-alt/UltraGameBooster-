@@ -218,25 +218,35 @@ object SystemOptimizer {
     }
 
     // --- Gerçek FPS: oyunun kendi SurfaceFlinger katmanından okunur (Shizuku gerekir) ---
+    // FPS okunamazsa nedenini kısa metin olarak tutar (HUD'da teşhis için gösterilir)
+    @Volatile var fpsStatus: String = ""
+    private var latencyNote: String = ""
+
     fun getHardwareRealFps(gamePackage: String): Int {
-        if (!isShizukuReady() || gamePackage.isBlank()) return -1
+        if (!isShizukuReady()) { fpsStatus = "shizuku yok"; return -1 }
+        if (gamePackage.isBlank()) { fpsStatus = "oyun seçilmedi"; return -1 }
         return try {
             val cached = cachedFpsLayer.takeIf { cachedFpsLayerPkg == gamePackage }
             if (cached != null) {
                 val fps = fpsFromLatency(cached)
-                if (fps > 0) return fps
+                if (fps > 0) { fpsStatus = ""; return fps }
                 cachedFpsLayer = null // oyun yeniden açılmış olabilir, katmanı yeniden ara
             }
-            for (layer in findGameLayers(gamePackage)) {
+            val layers = findGameLayers(gamePackage)
+            if (layers.isEmpty()) { fpsStatus = "katman yok"; return -1 }
+            for (layer in layers) {
                 val fps = fpsFromLatency(layer)
                 if (fps > 0) {
                     cachedFpsLayer = layer
                     cachedFpsLayerPkg = gamePackage
+                    fpsStatus = ""
                     return fps
                 }
             }
+            fpsStatus = "okuma: $latencyNote"
             -1
         } catch (_: Exception) {
+            fpsStatus = "hata"
             -1
         }
     }
@@ -260,13 +270,13 @@ object SystemOptimizer {
                 val t = if (p.size >= 3) p[1].toLongOrNull() else null
                 if (t == null || t <= 0L || t == Long.MAX_VALUE) null else t
             }
-        val newest = times.maxOrNull() ?: return -1
+        val newest = times.maxOrNull() ?: run { latencyNote = "satır yok"; return -1 }
         // Veri bayatsa (oyun kare üretmiyorsa) eski bir sayıyı göstermeyelim
-        if (System.nanoTime() - newest > 3_000_000_000L) return -1
+        if (System.nanoTime() - newest > 3_000_000_000L) { latencyNote = "bayat"; return -1 }
         val recent = times.filter { it >= newest - 1_000_000_000L }
-        if (recent.size < 2) return -1
+        if (recent.size < 2) { latencyNote = "az kare"; return -1 }
         val span = (recent.maxOrNull() ?: return -1) - (recent.minOrNull() ?: return -1)
-        if (span <= 0L) return -1
+        if (span <= 0L) { latencyNote = "süre 0"; return -1 }
         return ((recent.size - 1) * 1_000_000_000.0 / span).roundToInt().coerceIn(1, 165)
     }
 

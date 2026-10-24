@@ -187,7 +187,7 @@ class GameOverlayService : Service() {
                 val pkg = gamePackage
                 val hwFps = withContext(Dispatchers.IO) { SystemOptimizer.getHardwareRealFps(pkg) }
 
-                val fpsLabel = if (hwFps > 0) "FPS: $hwFps" else "FPS: --"
+                val fpsLabel = if (hwFps > 0) "FPS: $hwFps" else "FPS: -- (${SystemOptimizer.fpsStatus})"
                 val cpuLabel = if (cpuC > 0f) "CPU ${cpuC}°  |  " else ""
                 val isHot = batC >= 43.0f || cpuC >= 85.0f
                 val thermalWarn = if (isHot) " SICAK!" else ""
