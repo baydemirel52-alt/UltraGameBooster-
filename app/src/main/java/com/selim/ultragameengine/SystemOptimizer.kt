@@ -174,6 +174,12 @@ object SystemOptimizer {
                 val targetW = (scaledW / 8) * 8
                 val targetH = (scaledH / 8) * 8
                 runShizukuCommand("wm size ${targetW}x${targetH}")
+                // Yoğunluğu (DPI) da aynı oranda düşür; yoksa arayüz ekrana göre büyük görünür
+                val origDensity = prefs.getInt(KEY_ORIG_DENSITY, 0)
+                if (origDensity > 0 && origW > 0) {
+                    val targetDensity = (origDensity.toFloat() * targetW / origW).roundToInt()
+                    runShizukuCommand("wm density $targetDensity")
+                }
                 val percent = (profile.resolutionScale * 100f).roundToInt()
                 logs.add("GPU Ölçekleme: ${targetW}x${targetH} (%$percent) uygulandı.")
             }
