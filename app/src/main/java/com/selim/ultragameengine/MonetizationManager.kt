@@ -29,23 +29,51 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
     private val rewardedAdUnitId = "ca-app-pub-3940256099942544/5224354917"
     private val proProductId = "ultra_game_engine_pro_lifetime"
 
+    // Geliştirici modu: kodun kendisi değil, SHA-256 özeti burada durur (repo herkese açık).
+    private val devCodeHash = "5d92bd42ccaddb5826cb5f21f498cc1058f6a712c94b01cc98cd59cc51f62ea0"
+
+    private val _isDevMode = MutableStateFlow(prefs.getBoolean("dev_mode", false))
+    val isDevMode: StateFlow<Boolean> = _isDevMode
+
     private val _isProUnlocked = MutableStateFlow(checkAccessStatus())
     val isProUnlocked: StateFlow<Boolean> = _isProUnlocked
 
     init {
-        MobileAds.initialize(context) {}
-        loadRewardedAd()
+        if (!_isDevMode.value) {
+            MobileAds.initialize(context) {}
+            loadRewardedAd()
+        }
         setupBillingClient()
     }
 
+    fun tryEnableDevMode(code: String): Boolean {
+        val hash = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(code.trim().toByteArray())
+            .joinToString("") { "%02x".format(it) }
+        if (hash != devCodeHash) return false
+        prefs.edit().putBoolean("dev_mode", true).apply()
+        _isDevMode.value = true
+        _isProUnlocked.value = true
+        return true
+    }
+
+    fun disableDevMode() {
+        prefs.edit().putBoolean("dev_mode", false).apply()
+        _isDevMode.value = false
+        _isProUnlocked.value = checkAccessStatus()
+        MobileAds.initialize(context) {}
+        loadRewardedAd()
+    }
+
     fun checkAccessStatus(): Boolean {
+        val isDev = prefs.getBoolean("dev_mode", false)
         val isLifetimePro = prefs.getBoolean("is_lifetime_pro", false)
         val rewardExpiryTime = prefs.getLong("reward_expiry_time", 0L)
-        return isLifetimePro || System.currentTimeMillis() < rewardExpiryTime
+        return isDev || isLifetimePro || System.currentTimeMillis() < rewardExpiryTime
     }
 
     fun getRemainingRewardMinutes(): Long {
-        if (prefs.getBoolean("is_lifetime_pro", false)) return 999999L
+        if (prefs.getBoolean("dev_mode", false) || prefs.getBoolean("is_lifetime_pro", false)) return 999999L
         val expiry = prefs.getLong("reward_expiry_time", 0L)
         val diff = expiry - System.currentTimeMillis()
         return if (diff > 0L) TimeUnit.MILLISECONDS.toMinutes(diff) else 0L

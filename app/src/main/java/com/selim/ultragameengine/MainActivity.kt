@@ -37,6 +37,10 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -96,6 +100,9 @@ class MainActivity : ComponentActivity() {
     fun UltraEngineMainScreen() {
         val scope = rememberCoroutineScope()
         val isProUnlocked by monetizationManager.isProUnlocked.collectAsState()
+        val isDevMode by monetizationManager.isDevMode.collectAsState()
+        var showDevDialog by remember { mutableStateOf(false) }
+        var devCodeInput by remember { mutableStateOf("") }
         var shizukuReady by remember { mutableStateOf(SystemOptimizer.isShizukuReady()) }
         var installedGames by remember { mutableStateOf(emptyList<GameAppInfo>()) }
         var selectedGame by remember { mutableStateOf<GameAppInfo?>(null) }
@@ -253,9 +260,15 @@ class MainActivity : ComponentActivity() {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .pointerInput(Unit) {
+                                detectTapGestures(onLongPress = { showDevDialog = true })
+                            }
+                    ) {
                         Text(
-                            text = if (isProUnlocked) "ULTRA PRO AKTİF (${monetizationManager.getRemainingRewardMinutes()} dk)" else "ULTRA DONANIM AYARLARI KİLİTLİ",
+                            text = if (isDevMode) "ULTRA PRO AKTİF (GELİŞTİRİCİ)" else if (isProUnlocked) "ULTRA PRO AKTİF (${monetizationManager.getRemainingRewardMinutes()} dk)" else "ULTRA DONANIM AYARLARI KİLİTLİ",
                             color = Color.White,
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
@@ -483,16 +496,50 @@ class MainActivity : ComponentActivity() {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            AndroidView(
-                modifier = Modifier.fillMaxWidth(),
-                factory = { ctx ->
-                    AdView(ctx).apply {
-                        setAdSize(AdSize.BANNER)
-                        adUnitId = "ca-app-pub-3940256099942544/6300978111"
-                        loadAd(AdRequest.Builder().build())
+            if (!isDevMode) {
+                AndroidView(
+                    modifier = Modifier.fillMaxWidth(),
+                    factory = { ctx ->
+                        AdView(ctx).apply {
+                            setAdSize(AdSize.BANNER)
+                            adUnitId = "ca-app-pub-3940256099942544/6300978111"
+                            loadAd(AdRequest.Builder().build())
+                        }
                     }
-                }
-            )
+                )
+            }
+
+            if (showDevDialog) {
+                AlertDialog(
+                    onDismissRequest = { showDevDialog = false },
+                    title = { Text(if (isDevMode) "Geliştirici modu açık" else "Geliştirici kodu") },
+                    text = {
+                        if (isDevMode) {
+                            Text("Reklamlar kapalı, Pro açık.")
+                        } else {
+                            OutlinedTextField(
+                                value = devCodeInput,
+                                onValueChange = { devCodeInput = it },
+                                singleLine = true
+                            )
+                        }
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            if (isDevMode) {
+                                monetizationManager.disableDevMode()
+                            } else if (!monetizationManager.tryEnableDevMode(devCodeInput)) {
+                                Toast.makeText(this@MainActivity, "Kod yanlış", Toast.LENGTH_SHORT).show()
+                            }
+                            devCodeInput = ""
+                            showDevDialog = false
+                        }) { Text(if (isDevMode) "Kapat" else "Aç") }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { showDevDialog = false }) { Text("Vazgeç") }
+                    }
+                )
+            }
         }
     }
 }
