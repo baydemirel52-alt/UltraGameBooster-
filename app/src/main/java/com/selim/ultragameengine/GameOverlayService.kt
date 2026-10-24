@@ -176,13 +176,12 @@ class GameOverlayService : Service() {
                 val pingMs = measureRealPing()
                 val cpuC = withContext(Dispatchers.IO) { SystemOptimizer.getCpuTemperature() }
                 val batC = SystemOptimizer.getBatteryTemperature(this@GameOverlayService)
-                val freeRamMb = getAvailableRamMb()
 
                 val cpuLabel = if (cpuC > 0f) "CPU ${cpuC}° | " else ""
                 val isHot = batC >= 43.0f || cpuC >= 85.0f
                 val thermalWarn = if (isHot) " SICAK!" else ""
 
-                telemetryText?.text = "${pingMs}ms | ${cpuLabel}PİL ${batC}°$thermalWarn | RAM: ${freeRamMb}MB"
+                telemetryText?.text = "${pingMs}ms | ${cpuLabel}PİL ${batC}°$thermalWarn"
 
                 if (isHot) {
                     telemetryText?.setTextColor(Color.parseColor("#FF5252"))
@@ -205,13 +204,6 @@ class GameOverlayService : Service() {
         } catch (_: Exception) {
             999
         }
-    }
-
-    private fun getAvailableRamMb(): Long {
-        val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
-        val memInfo = ActivityManager.MemoryInfo()
-        am.getMemoryInfo(memInfo)
-        return memInfo.availMem / 1048576L
     }
 
     override fun onDestroy() {
