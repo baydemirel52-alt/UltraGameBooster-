@@ -39,14 +39,7 @@ class GameOverlayService : Service() {
     private var telemetryText: TextView? = null
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
-    @Volatile private var gamePackage = ""
-
     override fun onBind(intent: Intent?): IBinder? = null
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        intent?.getStringExtra("game_pkg")?.let { gamePackage = it }
-        return super.onStartCommand(intent, flags, startId)
-    }
 
     override fun onCreate() {
         super.onCreate()
@@ -184,15 +177,12 @@ class GameOverlayService : Service() {
                 val cpuC = withContext(Dispatchers.IO) { SystemOptimizer.getCpuTemperature() }
                 val batC = SystemOptimizer.getBatteryTemperature(this@GameOverlayService)
                 val freeRamMb = getAvailableRamMb()
-                val pkg = gamePackage
-                val hwFps = withContext(Dispatchers.IO) { SystemOptimizer.getHardwareRealFps(pkg) }
 
-                val fpsLabel = if (hwFps > 0) "FPS: $hwFps" else "FPS: -- (${SystemOptimizer.fpsStatus})"
                 val cpuLabel = if (cpuC > 0f) "CPU ${cpuC}° | " else ""
                 val isHot = batC >= 43.0f || cpuC >= 85.0f
                 val thermalWarn = if (isHot) " SICAK!" else ""
 
-                telemetryText?.text = "$fpsLabel | ${pingMs}ms | ${cpuLabel}PİL ${batC}°$thermalWarn | RAM: ${freeRamMb}MB"
+                telemetryText?.text = "${pingMs}ms | ${cpuLabel}PİL ${batC}°$thermalWarn | RAM: ${freeRamMb}MB"
 
                 if (isHot) {
                     telemetryText?.setTextColor(Color.parseColor("#FF5252"))

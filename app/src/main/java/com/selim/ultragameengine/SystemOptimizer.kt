@@ -40,8 +40,6 @@ object SystemOptimizer {
 
     private var wifiLock: WifiManager.WifiLock? = null
     private var cachedCpuZonePaths: List<String>? = null
-    private var cachedFpsLayer: String? = null
-    private var cachedFpsLayerPkg: String? = null
 
     // Shizuku 13.1.5 içindeki private newProcess metoduna güvenli Reflection erişimi
     private val shizukuNewProcessMethod: Method? by lazy {
@@ -221,69 +219,6 @@ object SystemOptimizer {
             return "Tüm ekran çözünürlüğü, Hz ve ağ ayarları orijinal fabrika değerlerine döndürüldü."
         }
         return "Standart ağ ve bildirim ayarları sıfırlandı."
-    }
-
-    // --- Gerçek FPS: oyunun kendi SurfaceFlinger katmanından okunur (Shizuku gerekir) ---
-    // FPS okunamazsa nedenini kısa metin olarak tutar (HUD'da teşhis için gösterilir)
-    @Volatile var fpsStatus: String = ""
-    private var latencyNote: String = ""
-
-    fun getHardwareRealFps(gamePackage: String): Int {
-        if (!isShizukuReady()) { fpsStatus = "shizuku yok"; return -1 }
-        if (gamePackage.isBlank()) { fpsStatus = "oyun seçilmedi"; return -1 }
-        return try {
-            val cached = cachedFpsLayer.takeIf { cachedFpsLayerPkg == gamePackage }
-            if (cached != null) {
-                val fps = fpsFromLatency(cached)
-                if (fps > 0) { fpsStatus = ""; return fps }
-                cachedFpsLayer = null // oyun yeniden açılmış olabilir, katmanı yeniden ara
-            }
-            val layers = findGameLayers(gamePackage)
-            if (layers.isEmpty()) { fpsStatus = "katman yok"; return -1 }
-            for (layer in layers) {
-                val fps = fpsFromLatency(layer)
-                if (fps > 0) {
-                    cachedFpsLayer = layer
-                    cachedFpsLayerPkg = gamePackage
-                    fpsStatus = ""
-                    return fps
-                }
-            }
-            fpsStatus = "okuma: $latencyNote"
-            -1
-        } catch (_: Exception) {
-            fpsStatus = "hata"
-            -1
-        }
-    }
-
-    private fun findGameLayers(pkg: String): List<String> {
-        val layers = runShizukuCommand("dumpsys SurfaceFlinger --list")
-            .lines()
-            .map { it.trim() }
-            .filter { it.contains(pkg) && !it.startsWith("Background for") && !it.startsWith("Bounds for") }
-        val surfaceViews = layers.filter { it.startsWith("SurfaceView") }
-        return (surfaceViews.filter { it.contains("BLAST") } + surfaceViews + layers).distinct().take(4)
-    }
-
-    private fun fpsFromLatency(layer: String): Int {
-        val safe = layer.replace("'", "'\\''")
-        val times = runShizukuCommand("dumpsys SurfaceFlinger --latency '$safe'")
-            .lines()
-            .drop(1)
-            .mapNotNull { line ->
-                val p = line.trim().split("\\s+".toRegex())
-                val t = if (p.size >= 3) p[1].toLongOrNull() else null
-                if (t == null || t <= 0L || t == Long.MAX_VALUE) null else t
-            }
-        val newest = times.maxOrNull() ?: run { latencyNote = "satır yok"; return -1 }
-        // Veri bayatsa (oyun kare üretmiyorsa) eski bir sayıyı göstermeyelim
-        if (System.nanoTime() - newest > 3_000_000_000L) { latencyNote = "bayat"; return -1 }
-        val recent = times.filter { it >= newest - 1_000_000_000L }
-        if (recent.size < 2) { latencyNote = "az kare"; return -1 }
-        val span = (recent.maxOrNull() ?: return -1) - (recent.minOrNull() ?: return -1)
-        if (span <= 0L) { latencyNote = "süre 0"; return -1 }
-        return ((recent.size - 1) * 1_000_000_000.0 / span).roundToInt().coerceIn(1, 165)
     }
 
     // --- Sıcaklık: pil ve CPU ayrı okunur ---

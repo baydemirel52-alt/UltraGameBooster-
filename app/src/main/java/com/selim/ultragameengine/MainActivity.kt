@@ -196,7 +196,7 @@ class MainActivity : ComponentActivity() {
 
                     if (showShizukuWizard) {
                         Text(
-                            text = "Çözünürlük ölçekleme ve gerçek FPS ölçümü için Rootsuz ADB yetkisi gerekir:\n" +
+                            text = "Çözünürlük ölçekleme ve CPU sıcaklığı okuma için Rootsuz ADB yetkisi gerekir:\n" +
                                     "1. Shizuku uygulamasını indirip açın.\n" +
                                     "2. Geliştirici Seçenekleri -> Kablosuz Hata Ayıklama ile Shizuku'yu başlatın.\n" +
                                     "3. 'Yetki Bağla' butonuna basıp Ultra Motoru ateşleyin.",
@@ -465,7 +465,6 @@ class MainActivity : ComponentActivity() {
                     }
 
                     val hudIntent = Intent(this@MainActivity, GameOverlayService::class.java)
-                    hudIntent.putExtra("game_pkg", pkg)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         startForegroundService(hudIntent)
                     } else {
