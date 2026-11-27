@@ -3,6 +3,7 @@ package com.selim.ultragameengine
 import android.app.Activity
 import android.content.Context
 import android.widget.Toast
+import com.android.billingclient.api.AcknowledgePurchaseParams
 import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
 import com.android.billingclient.api.BillingFlowParams
@@ -30,7 +31,7 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
     private val proProductId = "ultra_game_engine_pro_lifetime"
 
     // Geliştirici modu: kodun kendisi değil, SHA-256 özeti burada durur (repo herkese açık).
-    private val devCodeHash = "5d92bd42ccaddb5826cb5f21f498cc1058f6a712c94b01cc98cd59cc51f62ea0"
+    private val devCodeHash = "5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5"
 
     private val _isDevMode = MutableStateFlow(prefs.getBoolean("dev_mode", false))
     val isDevMode: StateFlow<Boolean> = _isDevMode
@@ -163,9 +164,7 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
     override fun onPurchasesUpdated(billingResult: BillingResult, purchases: MutableList<Purchase>?) {
         if (billingResult.responseCode == BillingClient.BillingResponseCode.OK && purchases != null) {
             for (purchase in purchases) {
-                if (purchase.purchaseState == Purchase.PurchaseState.PURCHASED) {
-                    prefs.edit().putBoolean("is_lifetime_pro", true).apply()
-                    _isProUnlocked.value = true
+                if (grantProIfPurchased(purchase)) {
                     Toast.makeText(context, "Ömür Boyu PRO Sürüm Aktif Edildi!", Toast.LENGTH_LONG).show()
                 }
             }
@@ -176,12 +175,24 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
         val params = QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.INAPP).build()
         billingClient?.queryPurchasesAsync(params) { result, purchases ->
             if (result.responseCode == BillingClient.BillingResponseCode.OK) {
-                val hasPro = purchases.any { it.purchaseState == Purchase.PurchaseState.PURCHASED }
-                if (hasPro) {
-                    prefs.edit().putBoolean("is_lifetime_pro", true).apply()
-                    _isProUnlocked.value = true
-                }
+                purchases.forEach { grantProIfPurchased(it) }
             }
         }
+    }
+
+    // Satın alma onaylanmazsa (acknowledge) Google 3 gün içinde parayı iade eder ve Pro geri alınır.
+    private fun grantProIfPurchased(purchase: Purchase): Boolean {
+        if (purchase.purchaseState != Purchase.PurchaseState.PURCHASED) return false
+        if (!purchase.products.contains(proProductId)) return false
+
+        if (!purchase.isAcknowledged) {
+            val ackParams = AcknowledgePurchaseParams.newBuilder()
+                .setPurchaseToken(purchase.purchaseToken)
+                .build()
+            billingClient?.acknowledgePurchase(ackParams) { }
+        }
+        prefs.edit().putBoolean("is_lifetime_pro", true).apply()
+        _isProUnlocked.value = true
+        return true
     }
 }

@@ -12,8 +12,8 @@ android {
         applicationId = "com.selim.ultragameengine"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0-PRO"
+        versionCode = 2
+        versionName = "1.1.0-PRO"
     }
 
     signingConfigs {
@@ -21,9 +21,10 @@ android {
             val keystoreFile = file("keystore/release.keystore")
             if (keystoreFile.exists()) {
                 storeFile = keystoreFile
-                storePassword = System.getenv("KEYSTORE_PASSWORD") ?: "ultragame123"
-                keyAlias = System.getenv("KEY_ALIAS") ?: "ultragamekey"
-                keyPassword = System.getenv("KEY_PASSWORD") ?: "ultragame123"
+                // GitHub'da tanımsız bir secret boş string olarak gelir; bu yüzden boşsa varsayılana düş.
+                storePassword = System.getenv("KEYSTORE_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "ultragame123"
+                keyAlias = System.getenv("KEY_ALIAS")?.takeIf { it.isNotEmpty() } ?: "ultragamekey"
+                keyPassword = System.getenv("KEY_PASSWORD")?.takeIf { it.isNotEmpty() } ?: "ultragame123"
             }
         }
     }
