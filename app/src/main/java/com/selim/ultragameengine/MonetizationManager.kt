@@ -31,7 +31,7 @@ class MonetizationManager(private val context: Context) : PurchasesUpdatedListen
     private val proProductId = "ultra_game_engine_pro_lifetime"
 
     // Geliştirici modu: kodun kendisi değil, SHA-256 özeti burada durur (repo herkese açık).
-    private val devCodeHash = "5d92bd42ccaddb5826cb5f21f498cc1058f6a712c94b01cc98cd59cc51f62ea0"
+    private val devCodeHash = "5994471abb01112afcc18159f6cc74b4f511b99806da59b3caf5a9c173cacfc5"
 
     private val _isDevMode = MutableStateFlow(prefs.getBoolean("dev_mode", false))
     val isDevMode: StateFlow<Boolean> = _isDevMode
