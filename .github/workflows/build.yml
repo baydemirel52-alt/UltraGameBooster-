@@ -3,6 +3,9 @@ name: Ultra Game Engine - Play Store AAB & APK Build
 on:
   push:
     branches: [ "main", "master" ]
+  # Pull request açıldığında da derle: kod bozuksa değişiklik main'e girmeden fark edilir.
+  pull_request:
+    branches: [ "main", "master" ]
   workflow_dispatch:
 
 jobs:
@@ -72,6 +75,11 @@ jobs:
           fi
 
       - name: Play Store AAB ve Test APK Derle
+        # Kendi keystore'unu KEYSTORE_BASE64 ile verdiysen şifreleri de secret olarak ver (README'de anlatıldı).
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle assembleRelease bundleRelease --stacktrace --no-daemon
 
       - name: Play Store AAB Dosyasini Yukle
